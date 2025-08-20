@@ -209,7 +209,7 @@ for epoch in tqdm(range(epochs)):
         sync(); t2 = perf_counter()
         
         pred = model(blocks, x)
-        loss = loss(pred, y)
+        loss = loss_fn(pred, y)
         sync(); t3 = perf_counter()
 
         optimizer.zero_grad(set_to_none=True)
