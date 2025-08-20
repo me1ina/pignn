@@ -167,12 +167,12 @@ sampler = NeighborSampler(
 train_loader = DataLoader(
     g, train_nids, sampler,
     batch_size=batch_size, shuffle=True, drop_last=False,
-    num_workers=num_workers, persistent_workers=True, pin_memory=True
+    num_workers=num_workers, persistent_workers=True
 )
 val_loader = DataLoader(
     g, val_nids, sampler,
     batch_size=batch_size, shuffle=False, drop_last=False,
-    num_workers=num_workers, persistent_workers=True, pin_memory=True
+    num_workers=num_workers, persistent_workers=True
 )
 
 optimizer_warmup = torch.optim.Adam(model.parameters(), lr=warmup_lr)
