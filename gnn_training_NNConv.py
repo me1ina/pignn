@@ -1,3 +1,4 @@
+from itertools import islice
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +8,7 @@ from dgl.dataloading import NeighborSampler, DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from dgl.nn import NNConv
 from tqdm import tqdm
+import os
 
 logging.basicConfig(
     filename='training.log',
@@ -17,18 +19,22 @@ logging.basicConfig(
 
 # Experiment configuration
 in_feats = 6
-hidden_feats = 128
+hidden_feats = 64
 out_feats = 1
 edge_feat_dim = 1
-fanouts = [20, 10, 5]
-batch_size = 1024
-epochs_warmup = 50
+fanouts = [15, 10, 3]
+batch_size = 2048
+epochs_warmup = 5
 warmup_lr = 1e-3
-warmup_patience = 5
-epochs_data_loss = 250
+warmup_patience = 2
+epochs_data_loss = 25
 data_loss_lr = 1e-4
-data_loss_patience = 10
+data_loss_patience = 2
 alpha_for_weights = 2.0  # Weighting factor for the loss function
+ckpt_epochs = 5
+validation_epochs = 5
+steps_per_epoch = 2000
+num_workers = 4  # Number of workers for DataLoader
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats          : {in_feats}")
@@ -44,6 +50,10 @@ logging.info(f"epochs_data_loss  : {epochs_data_loss}")
 logging.info(f"data_loss_lr      : {data_loss_lr}")
 logging.info(f"data_loss_patience: {data_loss_patience}")
 logging.info(f"weight_alpha      : {alpha_for_weights}")
+logging.info(f"checkpoint_epochs  : {ckpt_epochs}")
+logging.info(f"validation_epochs  : {validation_epochs}")
+logging.info(f"steps_per_epoch    : {steps_per_epoch}")
+logging.info(f"num_workers        : {num_workers}")
 logging.info("================================\n")
 
 class EdgeAwareGNN(nn.Module):
@@ -88,34 +98,47 @@ class EdgeAwareGNN(nn.Module):
         e3 = blocks[2].edata['stim'].unsqueeze(-1)  # shape [E2,1]
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def save_ckpt(path: str = "checkpoints/", *, epoch, model, optimizer, scheduler, best_val,
-              y_min, y_max, feat_mean, feat_std, config):
-    path = path + f"checkpoint_epoch_{epoch+1}.pth"
-    torch.save({
-        "epoch": epoch,
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "scheduler_state": scheduler.state_dict() if scheduler else None,
-        "best_val": best_val,
-        # scalers needed for inference/repro
-        "y_min": float(y_min),
-        "y_max": float(y_max),
-        "feat_mean": feat_mean.cpu(),
-        "feat_std": feat_std.cpu(),
-        "config": config,
-        # RNG states help reproducibility on resume
-        "rng_state_cpu": torch.get_rng_state(),
-        "rng_state_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-    }, path)
+def save_ckpt(model, best_val: bool = False, path: str = "checkpoints/"):
+    if best_val:
+        ckpt_name = f"checkpoint_best.pth"
+    else:
+        ckpt_name = f"checkpoint_epoch_last.pth"
+    path = path + ckpt_name
+    torch.save(model.state_dict(), path)
+    logging.info(f"Checkpoint saved to {path}")
 
 print("Start training process")
 print("Loading graph and initializing model...")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+use_cuda = (device.type == "cuda")
+gpu_name = torch.cuda.get_device_name(0) if use_cuda else "CPU"
+cc = torch.cuda.get_device_capability(0) if use_cuda else (0, 0)  # (major, minor)
+is_ampere_plus = use_cuda and (cc[0] >= 8)  # Ampere/Hopper/…
+print(f"GPU: {gpu_name}  CC:{cc}")
+
+if is_ampere_plus:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
 model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
+
+# Prefer BF16 if supported (more stable), else fall back to FP16
+use_bf16 = use_cuda and torch.cuda.is_bf16_supported()
+amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+scaler_warmup    = torch.cuda.amp.GradScaler(enabled=not use_bf16)  # no scaling needed for BF16
+scaler_data_loss = torch.cuda.amp.GradScaler(enabled=not use_bf16)
+
+logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus} "
+             f"AMP dtype={'bf16' if use_bf16 else 'fp16' if use_cuda else 'cpu'} "
+             f"TF32={'on' if is_ampere_plus else 'off'}")
 
 loaded_graphs, _ = dgl.load_graphs("mesh_graph_vol_area.dgl")
 g = loaded_graphs[0]
+
+#create checkpoint directory
+os.makedirs("checkpoints", exist_ok=True)
+logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
 
 g.ndata['feat'] = g.ndata['feat'][:, 0:6] # 7th feature would be volume which is not needed yet
 mean, std = g.ndata['feat'].mean(0), g.ndata['feat'].std(0)
@@ -143,11 +166,13 @@ sampler = NeighborSampler(
 )
 train_loader = DataLoader(
     g, train_nids, sampler,
-    batch_size=batch_size, shuffle=True, drop_last=False
+    batch_size=batch_size, shuffle=True, drop_last=False,
+    num_workers=num_workers, persistent_workers=True, pin_memory=True
 )
 val_loader = DataLoader(
     g, val_nids, sampler,
-    batch_size=batch_size, shuffle=False, drop_last=False
+    batch_size=batch_size, shuffle=False, drop_last=False,
+    num_workers=num_workers, persistent_workers=True, pin_memory=True
 )
 
 optimizer_warmup = torch.optim.Adam(model.parameters(), lr=warmup_lr)
@@ -162,91 +187,120 @@ print("Starting warmup training loop...")
 
 for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
     model.train()
-    total_train_loss = 0
+    total_train_loss, n_train_batches = 0.0, 0
     # Warmup Training loop
-    for input_nodes, output_nodes, blocks in train_loader:
+    for step, (input_nodes, output_nodes, blocks) in enumerate(islice(train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
         x = blocks[0].srcdata['feat']
         y = blocks[-1].dstdata['label_mm']
-        pred = model(blocks, x)
-        loss = loss_fn_warmup(pred, y)
-
-        optimizer_warmup.zero_grad()
-        loss.backward()
-        optimizer_warmup.step()
-        total_train_loss += loss.item()
-
-    # Warmup Validation loop
-    model.eval()
-    total_val_loss = 0
-    with torch.no_grad():
-        for input_nodes, output_nodes, blocks in val_loader:
-            blocks = [b.to(device) for b in blocks]
-            x = blocks[0].srcdata['feat']
-            y = blocks[-1].dstdata['label_mm']
+        with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x)
             loss = loss_fn_warmup(pred, y)
-            total_val_loss += loss.item()
-    avg_train = total_train_loss / len(train_loader)
-    avg_val   = total_val_loss   / len(val_loader)
 
-    scheduler_warmup.step(avg_val)
+        optimizer_warmup.zero_grad(set_to_none=True)
+        if scaler_warmup.is_enabled():
+            scaler_warmup.scale(loss).backward()
+            scaler_warmup.step(optimizer_warmup)
+            scaler_warmup.update()
+        else:
+            loss.backward()
+            optimizer_warmup.step()
+        total_train_loss += loss.item()
+        n_train_batches += 1
 
+    # Warmup Validation loop
+    if (epoch + 1) % validation_epochs == 0:
+        model.eval()
+        total_val_loss, n_val_batches = 0.0, 0
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            for steps, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch)):
+                blocks = [b.to(device) for b in blocks]
+                x = blocks[0].srcdata['feat']
+                y = blocks[-1].dstdata['label_mm']
+                pred = model(blocks, x)
+                loss = loss_fn_warmup(pred, y)
+                total_val_loss += loss.item()
+                n_val_batches += 1
+
+        avg_val   = total_val_loss  / max(1, n_val_batches)
+        scheduler_warmup.step(avg_val)
+
+    avg_train = total_train_loss / max(1, n_train_batches)
+
+    val_loss_str = f"Val Loss: {avg_val:.4f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[Warmup] Epoch {epoch+1}/{epochs_warmup}  "
           f"Train Loss: {avg_train:.4f}  "
-          f"Val Loss: {avg_val:.4f}  "
+          f"{val_loss_str}"
           f"LR: {optimizer_warmup.param_groups[0]['lr']:.2e}")
 
     print(msg)
     logging.info(msg)
 
 print("Warmup training done, starting data loss training...")
-
+best_val = float("inf")
 
 for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
     model.train()
-    total_train_loss = 0
+    total_train_loss, n_train_batches = 0.0, 0
     # Training loop
-    for input_nodes, output_nodes, blocks in train_loader:
+    for step, (input_nodes, output_nodes, blocks) in enumerate(islice(train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
 
-        w = weights_full[output_nodes].unsqueeze(-1)
+        w = weights_full[output_nodes.to(device)].unsqueeze(-1).to(x.dtype)
         x = blocks[0].srcdata['feat']
         y = blocks[-1].dstdata['label']
         
-        pred = model(blocks, x)
+        with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            pred = model(blocks, x)
+            loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
 
-        loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
-
-        optimizer_data_loss.zero_grad()
-        loss.backward()
-        optimizer_data_loss.step()
+        optimizer_data_loss.zero_grad(set_to_none=True)
+        if scaler_data_loss.is_enabled():
+            scaler_data_loss.scale(loss).backward()
+            scaler_data_loss.step(optimizer_data_loss)
+            scaler_data_loss.update()
+        else:
+            loss.backward()
+            optimizer_data_loss.step()
         total_train_loss += loss.item()
+        n_train_batches += 1
 
     # Validation loop
-    model.eval()
-    total_val_loss = 0
-    with torch.no_grad():
-        for input_nodes, output_nodes, blocks in val_loader:
-            blocks = [b.to(device) for b in blocks]
-                    
-            w = weights_full[output_nodes].unsqueeze(-1)
-            x = blocks[0].srcdata['feat']
-            y = blocks[-1].dstdata['label']
+    
+    if (epoch + 1) % validation_epochs == 0:
+        model.eval() 
+        total_val_loss, n_val_batches = 0.0, 0
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            for step, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch)):
+                blocks = [b.to(device) for b in blocks]
 
-            pred = model(blocks, x)
+                w = weights_full[output_nodes.to(device)].unsqueeze(-1).to(x.dtype)
+                x = blocks[0].srcdata['feat']
+                y = blocks[-1].dstdata['label']
 
-            loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
-            total_val_loss += loss.item()
+                pred = model(blocks, x)
 
-    avg_train = total_train_loss / len(train_loader)
-    avg_val   = total_val_loss   / len(val_loader)
+                loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
+                total_val_loss += loss.item()
+                n_val_batches += 1
 
-    scheduler_data_loss.step(avg_val)
+        avg_val = total_val_loss / max(1, n_val_batches)
+        scheduler_data_loss.step(avg_val)
 
-    msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss}  "
-          f"Train Loss: {avg_train:.4f}  "
-          f"Val Loss: {avg_val:.4f}  "
+        if avg_val < best_val - 1e-9:
+            best_val = avg_val
+            logging.info(f"New best validation loss: {best_val:.4f} at epoch {epoch+1}")
+            save_ckpt(model, True)
+
+    avg_train = total_train_loss / max(1, n_train_batches)
+
+    if (epoch + 1) % ckpt_epochs == 0:
+        save_ckpt(model, False)
+
+    val_loss_str = f"Val Loss: {avg_val:.4f} " if (epoch + 1) % validation_epochs == 0 else ""
+    msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
+          f"Train Loss: {avg_train:.4f} "
+          f"{val_loss_str}"
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
     
     print(msg)
