@@ -149,7 +149,7 @@ train_loader_simple = DataLoader(
 
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-loss = F.l1_loss
+loss = nn.L1Loss()
 
 logging.info("Graph loaded and dataloader initialized.")
 logging.info("Starting performance improved training loop...")
