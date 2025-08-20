@@ -29,7 +29,7 @@ batch_size = 2048
 epochs = 5
 lr = 1e-3
 steps_per_epoch = 100
-num_workers = 4  # Number of workers for DataLoader
+num_workers = 2  # Number of workers for DataLoader
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats          : {in_feats}")
@@ -149,7 +149,7 @@ train_loader_simple = DataLoader(
 
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-loss = nn.L1Loss()
+loss_fn = nn.L1Loss()
 
 logging.info("Graph loaded and dataloader initialized.")
 logging.info("Starting performance improved training loop...")
@@ -171,7 +171,7 @@ for epoch in tqdm(range(epochs)):
         
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x)
-            loss = loss(pred, y)
+            loss = loss_fn(pred, y)
         sync(); t3 = perf_counter()
 
         optimizer.zero_grad(set_to_none=True)

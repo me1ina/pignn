@@ -34,7 +34,7 @@ alpha_for_weights = 2.0  # Weighting factor for the loss function
 ckpt_epochs = 5
 validation_epochs = 5
 steps_per_epoch = 2000
-num_workers = 4  # Number of workers for DataLoader
+num_workers = 2  # Number of workers for DataLoader
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats          : {in_feats}")
