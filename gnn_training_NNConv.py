@@ -24,17 +24,18 @@ out_feats = 1
 edge_feat_dim = 1
 fanouts = [15, 10, 3]
 batch_size = 2048
-epochs_warmup = 10
+epochs_warmup = 16
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_data_loss = 100
+epochs_data_loss = 140
 data_loss_lr = 1e-4
 data_loss_patience = 2
-alpha_for_weights = 2.0  # Weighting factor for the loss function
 ckpt_epochs = 5
-validation_epochs = 5
+validation_epochs = 4
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
+stim_scale = 1/0.0066
+alpha_for_weights = 1.5
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats          : {in_feats}")
@@ -49,15 +50,16 @@ logging.info(f"warmup_patience   : {warmup_patience}")
 logging.info(f"epochs_data_loss  : {epochs_data_loss}")
 logging.info(f"data_loss_lr      : {data_loss_lr}")
 logging.info(f"data_loss_patience: {data_loss_patience}")
-logging.info(f"weight_alpha      : {alpha_for_weights}")
-logging.info(f"checkpoint_epochs  : {ckpt_epochs}")
-logging.info(f"validation_epochs  : {validation_epochs}")
-logging.info(f"steps_per_epoch    : {steps_per_epoch}")
-logging.info(f"num_workers        : {num_workers}")
+logging.info(f"checkpoint_epochs : {ckpt_epochs}")
+logging.info(f"validation_epochs : {validation_epochs}")
+logging.info(f"steps_per_epoch   : {steps_per_epoch}")
+logging.info(f"num_workers       : {num_workers}")
+logging.info(f"stim_scale        : {stim_scale}")
+logging.info(f"alpha_for_weights : {alpha_for_weights}")
 logging.info("================================\n")
 
 class EdgeAwareGNN(nn.Module):
-    def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim=1, aggregator='mean'):
+    def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim=1, aggregator='sum'):
         super().__init__()
         # Layer 1: in_feats → hidden_feats
         self.edge_mlp1 = nn.Sequential(
@@ -98,13 +100,17 @@ class EdgeAwareGNN(nn.Module):
         e3 = blocks[2].edata['stim'].unsqueeze(-1)  # shape [E2,1]
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def save_ckpt(model, best_val: bool = False, path: str = "checkpoints/"):
+def save_ckpt(model, feat_mean, feat_std, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
         ckpt_name = f"checkpoint_best.pth"
     else:
         ckpt_name = f"checkpoint_epoch_last.pth"
     path = path + ckpt_name
-    torch.save(model.state_dict(), path)
+    torch.save({
+    "model_state": model.state_dict(),
+    "feat_mean": feat_mean.cpu(),
+    "feat_std": feat_std.cpu(),
+    }, path)
     logging.info(f"Checkpoint saved to {path}")
 
 print("Start training process")
@@ -129,27 +135,57 @@ amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
 scaler_warmup    = torch.cuda.amp.GradScaler(enabled=not use_bf16)  # no scaling needed for BF16
 scaler_data_loss = torch.cuda.amp.GradScaler(enabled=not use_bf16)
 
-logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus} "
-             f"AMP dtype={'bf16' if use_bf16 else 'fp16' if use_cuda else 'cpu'} "
-             f"TF32={'on' if is_ampere_plus else 'off'}")
+logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus}\n"
+             f"AMP dtype={'bf16' if use_bf16 else 'fp16' if use_cuda else 'cpu'}\n"
+             f"TF32={'on' if is_ampere_plus else 'off'}\n")
 
 loaded_graphs, _ = dgl.load_graphs("mesh_graph_vol_area.dgl")
 g = loaded_graphs[0]
+g = dgl.to_bidirected(g, copy_ndata=True, copy_edata=True)
 
 #create checkpoint directory
 os.makedirs("checkpoints", exist_ok=True)
 logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
 
 g.ndata['feat'] = g.ndata['feat'][:, 0:6] # 7th feature would be volume which is not needed yet
-mean, std = g.ndata['feat'].mean(0), g.ndata['feat'].std(0)
-g.ndata['feat'] = (g.ndata['feat'] - mean) / std
+feat_mean = g.ndata['feat'].mean(0)
+feat_std = g.ndata['feat'].std(0).clamp_min(1e-12)
+g.ndata['feat'] = (g.ndata['feat'] - feat_mean) / feat_std
 
-y_min, y_max = g.ndata['label'].min(), g.ndata['label'].max()   # e.g. 0.0 and ~4.0
-g.ndata['label_mm'] = (g.ndata['label'] - y_min) / (y_max - y_min)
+g.edata['stim'] = g.edata['stim'] * stim_scale
 
-weights_full = (1 + alpha_for_weights * (g.ndata['label'] / y_max)).to(device)
+fm = feat_mean.cpu().numpy()
+fs = feat_std.cpu().numpy()
+logging.info(f"Feature mean: {fm}")
+logging.info(f"Feature std: {fs}")
 
-# At inference time: pred_orig = pred_mm * (y_max - y_min) + y_min
+mins = g.ndata['feat'].amin(0).values.cpu().numpy()
+maxs = g.ndata['feat'].amax(0).values.cpu().numpy()
+logging.info(f"Normalized feature ranges per-dim: min {mins}, max {maxs}")
+
+for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
+    logging.info(f"{name} range: min {float(g.ndata['feat'][:,i].amin())}, "
+                 f"max {float(g.ndata['feat'][:,i].amax())}")
+
+logging.info(f"I stim scaled range: min {float(g.edata['stim'].amin())}, "
+             f"max {float(g.edata['stim'].amax())}")
+
+logging.info(f"Potential range: min {float(g.ndata['label'].amin())}, "
+             f"max {float(g.ndata['label'].amax())}")
+
+#add distance-to-stim weight
+stim_mask = (g.edata['stim'] != 0)
+if stim_mask.ndim > 1:
+    stim_mask = stim_mask.squeeze(-1)
+eids = g.edges(form='eid')[stim_mask]
+stim_src, stim_dst = g.find_edges(eids)
+stim_nodes = torch.unique(torch.cat([stim_src, stim_dst]))
+_, khop_nodes = dgl.khop_in_subgraph(g, stim_nodes, k=3)
+w_dist = torch.zeros(g.num_nodes(), dtype=torch.float32)
+w_dist[khop_nodes] = 1.0
+g.ndata['w_dist'] = w_dist
+
+g.ndata['w_pot'] = 1 + alpha_for_weights * (g.ndata['label'] / g.ndata['label'].max())
 
 # Split node IDs into train / validation 
 all_nids = torch.arange(g.num_nodes())
@@ -161,7 +197,7 @@ train_nids = all_nids[perm[split:]]
 # Create two DataLoaders - one for training and one for validation
 sampler = NeighborSampler(
     fanouts, 
-    prefetch_node_feats=['feat', 'label_mm', 'label'], 
+    prefetch_node_feats=['feat', 'label', 'w_dist', 'w_pot'], 
     prefetch_edge_feats=['stim']
 )
 train_loader = DataLoader(
@@ -192,7 +228,7 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
     for step, (input_nodes, output_nodes, blocks) in enumerate(islice(train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
         x = blocks[0].srcdata['feat']
-        y = blocks[-1].dstdata['label_mm']
+        y = blocks[-1].dstdata['label']
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x)
             loss = loss_fn_warmup(pred, y)
@@ -216,7 +252,7 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
             for steps, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch)):
                 blocks = [b.to(device) for b in blocks]
                 x = blocks[0].srcdata['feat']
-                y = blocks[-1].dstdata['label_mm']
+                y = blocks[-1].dstdata['label']
                 pred = model(blocks, x)
                 loss = loss_fn_warmup(pred, y)
                 total_val_loss += loss.item()
@@ -245,10 +281,11 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
     # Training loop
     for step, (input_nodes, output_nodes, blocks) in enumerate(islice(train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
-
-        w = weights_full[output_nodes.to(device)].unsqueeze(-1).to(x.dtype)
+        
         x = blocks[0].srcdata['feat']
         y = blocks[-1].dstdata['label']
+        w = blocks[-1].dstdata['w_pot'].unsqueeze(-1).to(x.dtype)
+        w = w * (1.0 + blocks[-1].dstdata['w_dist'].unsqueeze(-1).to(x.dtype))
         
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x)
@@ -273,10 +310,11 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             for step, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch)):
                 blocks = [b.to(device) for b in blocks]
-
-                w = weights_full[output_nodes.to(device)].unsqueeze(-1).to(x.dtype)
+                
                 x = blocks[0].srcdata['feat']
                 y = blocks[-1].dstdata['label']
+                w = blocks[-1].dstdata['w_pot'].unsqueeze(-1).to(x.dtype)
+                w = w * (1.0 + blocks[-1].dstdata['w_dist'].unsqueeze(-1).to(x.dtype))
 
                 pred = model(blocks, x)
 
@@ -290,12 +328,12 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         if avg_val < best_val - 1e-9:
             best_val = avg_val
             logging.info(f"New best validation loss: {best_val:.4f} at epoch {epoch+1}")
-            save_ckpt(model, True)
+            save_ckpt(model, feat_mean, feat_std, True)
 
     avg_train = total_train_loss / max(1, n_train_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
-        save_ckpt(model, False)
+        save_ckpt(model, feat_mean, feat_std, False)
 
     val_loss_str = f"Val Loss: {avg_val:.4f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
@@ -307,5 +345,10 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
     logging.info(msg)
 
 # Save the model
-torch.save(model.state_dict(), "trained_gnn_data_loss_test_NNConv.pth")
-print("Training done, model saved as trained_gnn_data_loss_test_NNConv.pth")
+torch.save({
+    "model_state": model.state_dict(),
+    "feat_mean": feat_mean.cpu(),
+    "feat_std": feat_std.cpu(),
+}, "trained_gnn_NNConv.pth")
+
+print(f"Training done, model saved as trained_gnn_NNConv.pth")

@@ -54,116 +54,95 @@ class EdgeAwareGNN(nn.Module):
         e3 = blocks[2].edata['stim'].unsqueeze(-1)  # shape [E2,1]
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def perform_inference():
-    inference_graph_name = "mesh_graph_vol_area.dgl"
-    model_name = "trained_gnn_data_loss_test_NNConv.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
+inference_graph_name = "mesh_graph_vol_area.dgl"
+model_name = "trained_gnn_data_loss_test_NNConv.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
 
-    in_feats = 6
-    hidden_feats = 64
-    out_feats = 1
-    edge_feat_dim = 1
-    num_workers = 2
-    fanouts=(15,10,3)
-    batch_size=2048
+in_feats = 6
+hidden_feats = 64
+out_feats = 1
+edge_feat_dim = 1
+num_workers = 2
+fanouts=(15,10,3)
+batch_size=2048
+stim_scale = 1/0.0066
 
-    logging.basicConfig(
-        filename='inference.log',
-        filemode='w',           # overwrite on each run
-        level=logging.INFO,
-        format='%(asctime)s %(message)s'
-    )
+logging.basicConfig(
+    filename='inference.log',
+    filemode='w',           # overwrite on each run
+    level=logging.INFO,
+    format='%(asctime)s %(message)s'
+)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    use_cuda = (device.type == "cuda")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+use_cuda = (device.type == "cuda")
 
-    if use_cuda:
-        cc = torch.cuda.get_device_capability(0)
-        is_ampere_plus = cc[0] >= 8
-        if is_ampere_plus:
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-        use_bf16 = torch.cuda.is_bf16_supported()
-        amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
-    else:
-        amp_dtype = torch.float32
+if use_cuda:
+    cc = torch.cuda.get_device_capability(0)
+    is_ampere_plus = cc[0] >= 8
+    if is_ampere_plus:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    use_bf16 = torch.cuda.is_bf16_supported()
+    amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+else:
+    amp_dtype = torch.float32
 
 
-    loaded_graphs, _ = dgl.load_graphs(inference_graph_name)
-    g = loaded_graphs[0]
+loaded_graphs, _ = dgl.load_graphs(inference_graph_name)
+g = loaded_graphs[0]
 
-    #raw_coords = g.ndata['feat'][:, :3].clone()
+model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
+ckpt = torch.load(model_name, map_location=device)
+model.load_state_dict(ckpt["model_state"])
+feat_mean = ckpt["feat_mean"].to(g.ndata['feat'].dtype)
+feat_std  = ckpt["feat_std"].to(g.ndata['feat'].dtype)
 
-    nids = torch.arange(g.num_nodes(), dtype=torch.int64)
-    sampler = NeighborSampler(
-        list(fanouts),
-        prefetch_node_feats=['feat'],
-        prefetch_edge_feats=['stim']
-    )
+g.ndata['feat'] = (g.ndata['feat'] - feat_mean) / (feat_std + 1e-12)
+g.edata['stim'] = g.edata['stim'] * stim_scale
 
-    print("graph device:", g.device)
-    print("nids device :", nids.device)
+nids = torch.arange(g.num_nodes(), dtype=torch.int64)
+sampler = NeighborSampler(
+    list(fanouts),
+    prefetch_node_feats=['feat'],
+    prefetch_edge_feats=['stim']
+)
 
-    loader = DataLoader(
-        g, nids, sampler,
-        batch_size=batch_size, shuffle=False, drop_last=False,
-        num_workers=num_workers, persistent_workers=(num_workers > 0)
-    )
+print("graph device:", g.device)
+print("nids device :", nids.device)
 
-    model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
-    model.load_state_dict(torch.load(model_name, map_location=device))
-    model.eval()
+loader = DataLoader(
+    g, nids, sampler,
+    batch_size=batch_size, shuffle=False, drop_last=False,
+    num_workers=num_workers, persistent_workers=(num_workers > 0)
+)
 
-    print("Graph loaded, starting inference...")
-    start_time = time.time()
+model.eval()
 
-    preds = torch.empty((g.num_nodes(), out_feats), dtype=torch.float32)  # store on CPU
-    with torch.no_grad():
-        autocast_ctx = (torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype)
-                        if use_cuda else torch.autocast("cpu", dtype=torch.float32, enabled=False))
-        for input_nodes, output_nodes, blocks in tqdm(loader, desc="Inference"):
-            blocks = [b.to(device) for b in blocks]
-            x_b = blocks[0].srcdata['feat'][:, :in_feats]
-            with autocast_ctx:
-                y_b = model(blocks, x_b)  # [N_dst, 1]
-            preds[output_nodes] = y_b.detach().float().cpu()
+print("Graph loaded, starting inference...")
+start_time = time.time()
 
-    g.ndata["Electric_potential"] = preds.squeeze(1)
+preds = torch.empty((g.num_nodes(), out_feats), dtype=torch.float32)  # store on CPU
+with torch.no_grad():
+    autocast_ctx = (torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype)
+                    if use_cuda else torch.autocast("cpu", dtype=torch.float32, enabled=False))
+    for input_nodes, output_nodes, blocks in tqdm(loader, desc="Inference"):
+        blocks = [b.to(device) for b in blocks]
 
-    end_time = time.time() - start_time
-    logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
+        for i, b in enumerate(blocks):
+            s = b.edata['stim']
+            print(f"block {i}: stim>0 = {int((s > 0).sum())}, "
+                f"min={float(s.min())}, max={float(s.max())}, mean={float(s.mean())}")
+            
+        x_b = blocks[0].srcdata['feat'][:, :in_feats]
+        with autocast_ctx:
+            y_b = model(blocks, x_b)  # [N_dst, 1]
+        preds[output_nodes] = y_b.detach().float().cpu()
 
-    dgl.save_graphs("inference_gnn_test_VagusA1924_HC0_AS1.dgl", [g])
-    logging.info("Graph saved to inference_gnn_test_VagusA1924_HC0_AS1.dgl")
+g.ndata["Electric_potential"] = preds.squeeze(1)
 
-    return g
+end_time = time.time() - start_time
+logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-def visualize_graph(g):
-    print("Visualizing results as point cloud...")
+dgl.save_graphs("inference_gnn_test_VagusA1924_HC0_AS1.dgl", [g])
+logging.info("Graph saved to inference_gnn_test_VagusA1924_HC0_AS1.dgl")
 
-    pv.OFF_SCREEN = True
-
-    try:
-        pv.start_xvfb() 
-    except Exception:
-        pass
-
-    node_points = g.ndata["feat"][:, :3].numpy()  # coords
-    point_cloud = pv.PolyData(node_points)
-
-    #points where I_stim > 0
-    I_stim_mask = (g.edata["stim"] > 0).squeeze()
-    stimulated_eids = g.edges(form='eid')[I_stim_mask]
-
-    stimulated_nodes = g.find_edges(stimulated_eids)  # get source nodes of stimulated edges
-
-    stimulated_points = g.ndata["feat"][stimulated_nodes[0]][:, :3].cpu().numpy()  # coords of stimulated nodes
-    point_cloud_stimulated = pv.PolyData(stimulated_points)
-
-    plotter = pv.Plotter(off_screen=True)
-    plotter.add_mesh(point_cloud, scalars=g.ndata["Electric_potential"].cpu().numpy(), point_size=5) # Electric_potential
-    plotter.add_mesh(point_cloud_stimulated, color='yellow', point_size=10, render_points_as_spheres=True)
-    plotter.show(screenshot="potential_pointcloud.png")
-    print("Saved potential_pointcloud.png")
-
-g = perform_inference()
-visualize_graph(g)
