@@ -140,6 +140,13 @@ def perform_inference():
 def visualize_graph(g):
     print("Visualizing results as point cloud...")
 
+    pv.OFF_SCREEN = True
+
+    try:
+        pv.start_xvfb() 
+    except Exception:
+        pass
+
     node_points = g.ndata["feat"][:, :3].numpy()  # coords
     point_cloud = pv.PolyData(node_points)
 
@@ -152,10 +159,11 @@ def visualize_graph(g):
     stimulated_points = g.ndata["feat"][stimulated_nodes[0]][:, :3].cpu().numpy()  # coords of stimulated nodes
     point_cloud_stimulated = pv.PolyData(stimulated_points)
 
-    plotter = pv.Plotter()
+    plotter = pv.Plotter(off_screen=True)
     plotter.add_mesh(point_cloud, scalars=g.ndata["Electric_potential"].cpu().numpy(), point_size=5) # Electric_potential
     plotter.add_mesh(point_cloud_stimulated, color='yellow', point_size=10, render_points_as_spheres=True)
-    plotter.show()
+    plotter.show(screenshot="potential_pointcloud.png")
+    print("Saved potential_pointcloud.png")
 
 g = perform_inference()
 visualize_graph(g)
