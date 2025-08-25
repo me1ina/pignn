@@ -90,16 +90,19 @@ def perform_inference():
 
     loaded_graphs, _ = dgl.load_graphs(inference_graph_name)
     g = loaded_graphs[0]
-    g = g.to(device)
 
     #raw_coords = g.ndata['feat'][:, :3].clone()
 
-    nids = torch.arange(g.num_nodes())
+    nids = torch.arange(g.num_nodes(), dtype=torch.int64)
     sampler = NeighborSampler(
         list(fanouts),
         prefetch_node_feats=['feat'],
         prefetch_edge_feats=['stim']
     )
+
+    print("graph device:", g.device)
+    print("nids device :", nids.device)
+
     loader = DataLoader(
         g, nids, sampler,
         batch_size=batch_size, shuffle=False, drop_last=False,
