@@ -106,7 +106,7 @@ def perform_inference():
     loader = DataLoader(
         g, nids, sampler,
         batch_size=batch_size, shuffle=False, drop_last=False,
-        num_workers=num_workers, persistent_workers=(num_workers > 0), pin_memory=True
+        num_workers=num_workers, persistent_workers=(num_workers > 0)
     )
 
     model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
