@@ -159,8 +159,8 @@ fs = feat_std.cpu().numpy()
 logging.info(f"Feature mean: {fm}")
 logging.info(f"Feature std: {fs}")
 
-mins = g.ndata['feat'].amin(0).values.numpy()
-maxs = g.ndata['feat'].amax(0).values.numpy()
+mins = g.ndata['feat'].amin(0).values()
+maxs = g.ndata['feat'].amax(0).values()
 logging.info(f"Normalized feature ranges per-dim: min {mins}, max {maxs}")
 
 for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
