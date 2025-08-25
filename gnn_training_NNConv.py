@@ -141,7 +141,7 @@ logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus}\n"
 
 loaded_graphs, _ = dgl.load_graphs("mesh_graph_vol_area.dgl")
 g = loaded_graphs[0]
-g = dgl.to_bidirected(g, copy_ndata=True, copy_edata=True)
+#g = dgl.to_bidirected(g, copy_ndata=True)
 
 #create checkpoint directory
 os.makedirs("checkpoints", exist_ok=True)
