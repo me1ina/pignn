@@ -96,8 +96,9 @@ ckpt = torch.load(model_name, map_location=device)
 model.load_state_dict(ckpt["model_state"])
 
 g.ndata['feat'] = g.ndata['feat'][:, 0:in_feats] # 7th feature would be volume which is not needed yet
-feat_mean = ckpt["feat_mean"].to(g.ndata['feat'].dtype)
-feat_std  = ckpt["feat_std"].to(g.ndata['feat'].dtype)
+feats = g.ndata['feat']
+feat_mean = ckpt["feat_mean"].to(feats.device, dtype=feats.dtype)
+feat_std  = ckpt["feat_std"].to(feats.device, dtype=feats.dtype)
 
 g.ndata['feat'] = (g.ndata['feat'] - feat_mean) / (feat_std + 1e-12)
 g.edata['stim'] = g.edata['stim'] * stim_scale
