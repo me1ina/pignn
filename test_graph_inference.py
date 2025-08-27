@@ -55,7 +55,7 @@ class EdgeAwareGNN(nn.Module):
         return F.softplus(self.conv3(blocks[2], h, e3))
 
 inference_graph_name = "mesh_graph_vol_area.dgl"
-model_name = "trained_gnn_data_loss_test_NNConv.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
+model_name = "trained_gnn_NNConv.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
 
 in_feats = 6
 hidden_feats = 64
