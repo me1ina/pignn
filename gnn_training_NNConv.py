@@ -24,17 +24,17 @@ out_feats = 1
 edge_feat_dim = 1
 fanouts = [15, 10, 3]
 batch_size = 2048
-epochs_warmup = 1
+epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_data_loss = 0
+epochs_data_loss = 200
 data_loss_lr = 1e-4
-data_loss_patience = 2
+data_loss_patience = 4
 ckpt_epochs = 5
-validation_epochs = 4
+validation_epochs = 5
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
-stim_scale = 1/0.0066 # map µA to ~[0,1]
+stim_scale = 1/(0.0066 *2) # map µA to ~[0,1]
 alpha_for_weights = 2
 coord_max = 35.0 #mm
 z_center = 17.5 #mm
@@ -159,19 +159,6 @@ os.makedirs("checkpoints", exist_ok=True)
 logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
 
 g.ndata['feat'] = g.ndata['feat'][:, 0:6].to(torch.float32) # 7th feature would be volume which is not needed yet
-feat_mean = g.ndata['feat'].mean(0)
-feat_mean = feat_mean.to(device, dtype=g.ndata['feat'].dtype)
-feat_std = g.ndata['feat'].std(0).clamp_min(1e-12)
-feat_std  = feat_std.to(device, dtype=g.ndata['feat'].dtype)
-
-fm = feat_mean.cpu().numpy()
-fs = feat_std.cpu().numpy()
-logging.info(f"Feature mean: {fm}")
-logging.info(f"Feature std: {fs}")
-
-mins = g.ndata['feat'].amin(0)
-maxs = g.ndata['feat'].amax(0)
-logging.info(f"Normalized feature ranges per-dim: min {mins}, max {maxs}")
 
 for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
     logging.info(f"{name} range: min {float(g.ndata['feat'][:,i].amin())}, "
