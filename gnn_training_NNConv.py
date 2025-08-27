@@ -124,72 +124,6 @@ def norm_feats(feats):
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
 
-def smoothness_loss_on_block(last_block, pred_dst, sigma_src=None, sigma_dst=None, lam=1e-3):
-    """
-    Dirichlet energy on edges whose BOTH endpoints are in last_block.dstnodes().
-    last_block : DGLBlock (the last one)
-    pred_dst   : (N_dst, 1) tensor — model output for dst nodes of last_block
-    sigma_src  : optional (N_src,) tensor from last_block.srcdata[...] for weighting
-    sigma_dst  : optional (N_dst,) tensor from last_block.dstdata[...] for weighting
-    lam        : regularization strength
-
-    returns: scalar smoothness loss (already multiplied by lam)
-    """
-    B = last_block
-    srcNID = B.srcdata[dgl.NID]   # (N_src,) global ids
-    dstNID = B.dstdata[dgl.NID]   # (N_dst,) global ids
-    u, v   = B.edges()            # u in src-space, v in dst-space
-
-    # sort dst global ids and keep inverse to map back to local dst indices
-    dst_sorted, inv = torch.sort(dstNID)      # dst_sorted[ idx_sorted ] == dstNID[inv[idx_sorted]]
-    # where would each src endpoint’s global id be inserted?
-    pos = torch.searchsorted(dst_sorted, srcNID[u])
-
-    # ----- SAFE MATCHING: mask first, then index -----
-    inb      = pos < dst_sorted.numel()       # in-bounds positions only
-    if not inb.any():
-        return pred_dst.new_zeros(())
-
-    pos_inb  = pos[inb]                       # valid insertion positions
-    u_inb    = u[inb]                         # corresponding src endpoints
-    v_inb    = v[inb]                         # corresponding dst endpoints
-    src_inb  = srcNID[u_inb]                  # their global ids
-
-    # now it's safe to index dst_sorted[pos_inb]
-    eq       = (dst_sorted[pos_inb] == src_inb)
-    if not eq.any():
-        return pred_dst.new_zeros(())
-
-    pos_keep = pos_inb[eq]                    # positions that really match an existing dst id
-    u_keep   = u_inb[eq]
-    v_keep   = v_inb[eq]
-
-    # map matched src endpoints (by global id) to local dst indices
-    u_local  = inv[pos_keep]                  # src endpoint's local index in dst set
-    v_local  = v_keep                         # already local dst index
-
-    # optional: avoid double-counting on bidirected graphs
-    keep_dir = (srcNID[u_keep] < dstNID[v_keep])
-    if not keep_dir.any():
-        return pred_dst.new_zeros(())
-
-    u_local  = u_local[keep_dir]
-    v_local  = v_local[keep_dir]
-
-    # gather predictions (dst order)
-    phi_u = pred_dst[u_local].squeeze(-1)
-    phi_v = pred_dst[v_local].squeeze(-1)
-
-    # edge weights
-    if sigma_src is None or sigma_dst is None:
-        w_e = torch.ones_like(phi_u, dtype=phi_u.dtype)
-    else:
-        # sigmas aligned to block src/dst nodes
-        w_e = 0.5 * (sigma_src[u_keep][keep_dir] + sigma_dst[v_keep][keep_dir]).to(phi_u.dtype)
-
-    smooth = (w_e * (phi_u - phi_v).pow(2)).mean()
-    return lam * smooth
-
 print("Start training process")
 print("Loading graph and initializing model...")
 
@@ -299,7 +233,7 @@ print("Starting warmup training loop...")
 
 for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
     model.train()
-    total_train_loss, total_data_loss, total_smooth_loss, n_train_batches = 0.0, 0, 0, 0
+    total_train_loss, n_train_batches = 0.0, 0
     # Warmup Training loop
     for step, (input_nodes, output_nodes, blocks) in enumerate(islice(train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
@@ -309,18 +243,8 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             x = norm_feats(x)
             pred = model(blocks, x)
-            data_loss = loss_fn_warmup(pred, y)
+            loss = loss_fn_warmup(pred, y)
 
-        smooth_loss = smoothness_loss_on_block(
-            blocks[-1], 
-            pred, 
-            sigma_src=blocks[-1].srcdata['feat'][:, 3:6].mean(dim=1), 
-            sigma_dst=blocks[-1].dstdata['feat'][:, 3:6].mean(dim=1), 
-            lam=1e-3  # start with 1e-3
-        )
-        print(f"Data Loss: {data_loss.item():.4f}, Smooth Loss: {smooth_loss.item():.4f}")
-
-        loss = data_loss + smooth_loss
         optimizer_warmup.zero_grad(set_to_none=True)
         if scaler_warmup.is_enabled():
             scaler_warmup.scale(loss).backward()
@@ -330,8 +254,6 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
             loss.backward()
             optimizer_warmup.step()
         total_train_loss += loss.item()
-        total_data_loss += data_loss.item()
-        total_smooth_loss += smooth_loss.item()
         n_train_batches += 1
 
     # Warmup Validation loop
