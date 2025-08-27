@@ -136,47 +136,57 @@ def smoothness_loss_on_block(last_block, pred_dst, sigma_src=None, sigma_dst=Non
     returns: scalar smoothness loss (already multiplied by lam)
     """
     B = last_block
-    # Local → global ids
-    srcNID = B.srcdata[dgl.NID]  # (N_src,)
-    dstNID = B.dstdata[dgl.NID]  # (N_dst,)
+    srcNID = B.srcdata[dgl.NID]   # (N_src,) global ids
+    dstNID = B.dstdata[dgl.NID]   # (N_dst,) global ids
+    u, v   = B.edges()            # u in src-space, v in dst-space
 
-    # Edges (u in src space, v in dst space)
-    u, v = B.edges()  # local indices
+    # sort dst global ids and keep inverse to map back to local dst indices
+    dst_sorted, inv = torch.sort(dstNID)      # dst_sorted[ idx_sorted ] == dstNID[inv[idx_sorted]]
+    # where would each src endpoint’s global id be inserted?
+    pos = torch.searchsorted(dst_sorted, srcNID[u])
 
-    # --- keep only edges whose src endpoint ALSO lies in dst set ---
-    # Build vectorized map from global id -> dst local index
-    dstNID_sorted, inv = torch.sort(dstNID)              # inv maps sorted positions -> original dst index
-    pos = torch.searchsorted(dstNID_sorted, srcNID[u])   # candidate positions for each src global id
-    match = (pos < dstNID_sorted.numel()) & (dstNID_sorted[pos] == srcNID[u])
-    if not torch.any(match):
+    # ----- SAFE MATCHING: mask first, then index -----
+    inb      = pos < dst_sorted.numel()       # in-bounds positions only
+    if not inb.any():
         return pred_dst.new_zeros(())
 
-    # Local dst indices for u endpoints (that are also dst nodes)
-    u_local = inv[pos[match]]           # local dst indices
-    v_local = v[match]                  # already local dst indices
+    pos_inb  = pos[inb]                       # valid insertion positions
+    u_inb    = u[inb]                         # corresponding src endpoints
+    v_inb    = v[inb]                         # corresponding dst endpoints
+    src_inb  = srcNID[u_inb]                  # their global ids
 
-    # Optional: avoid double-counting on bidirected graphs (keep one direction)
-    # Use global ids to pick an orientation
-    keep = (srcNID[u[match]] < dstNID[v[match]])
-    u_local = u_local[keep]
-    v_local = v_local[keep]
-    if u_local.numel() == 0:
+    # now it's safe to index dst_sorted[pos_inb]
+    eq       = (dst_sorted[pos_inb] == src_inb)
+    if not eq.any():
         return pred_dst.new_zeros(())
 
-    # Gather predictions
+    pos_keep = pos_inb[eq]                    # positions that really match an existing dst id
+    u_keep   = u_inb[eq]
+    v_keep   = v_inb[eq]
+
+    # map matched src endpoints (by global id) to local dst indices
+    u_local  = inv[pos_keep]                  # src endpoint's local index in dst set
+    v_local  = v_keep                         # already local dst index
+
+    # optional: avoid double-counting on bidirected graphs
+    keep_dir = (srcNID[u_keep] < dstNID[v_keep])
+    if not keep_dir.any():
+        return pred_dst.new_zeros(())
+
+    u_local  = u_local[keep_dir]
+    v_local  = v_local[keep_dir]
+
+    # gather predictions (dst order)
     phi_u = pred_dst[u_local].squeeze(-1)
     phi_v = pred_dst[v_local].squeeze(-1)
 
-    # Weights
-    if sigma_src is not None and sigma_dst is not None:
-        # sigma_* should be 1-D tensors aligned to last_block.src/dst nodes
-        # Project to the selected edge endpoints:
-        w_e = 0.5 * ( sigma_src[u[match][keep]] + sigma_dst[v[match][keep]] )
-        w_e = w_e.to(phi_u.dtype)
+    # edge weights
+    if sigma_src is None or sigma_dst is None:
+        w_e = torch.ones_like(phi_u, dtype=phi_u.dtype)
     else:
-        w_e = torch.ones_like(phi_u)
+        # sigmas aligned to block src/dst nodes
+        w_e = 0.5 * (sigma_src[u_keep][keep_dir] + sigma_dst[v_keep][keep_dir]).to(phi_u.dtype)
 
-    # Dirichlet energy on this frontier (mean normalizes by batch size)
     smooth = (w_e * (phi_u - phi_v).pow(2)).mean()
     return lam * smooth
 
