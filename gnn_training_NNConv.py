@@ -164,6 +164,9 @@ for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
     logging.info(f"{name} range: min {float(g.ndata['feat'][:,i].amin())}, "
                  f"max {float(g.ndata['feat'][:,i].amax())}")
 
+logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
+             f"max {float(g.edata['stim'].amax())}")
+
 logging.info(f"I stim range scaled: min {float(g.edata['stim'].amin()) * stim_scale}, "
              f"max {float(g.edata['stim'].amax()) * stim_scale}")
 
