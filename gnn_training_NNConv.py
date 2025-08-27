@@ -34,8 +34,11 @@ ckpt_epochs = 5
 validation_epochs = 4
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
-stim_scale = 1/0.0066
-alpha_for_weights = 1.5
+stim_scale = 1/0.0066 # map µA to ~[0,1]
+alpha_for_weights = 2
+coord_max = 35.0 #mm
+z_center = 17.5 #mm
+sigma_max = 2.0 # S/m
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats          : {in_feats}")
@@ -91,16 +94,16 @@ class EdgeAwareGNN(nn.Module):
         x:     input node features for the src nodes of blocks[0]
         """
         # Layer 1
-        e1 = blocks[0].edata['stim'].unsqueeze(-1)  # shape [E0,1]
+        e1 = blocks[0].edata['stim'].unsqueeze(-1) * stim_scale # shape [E0,1]
         h = F.relu(self.norm1(self.conv1(blocks[0], x, e1)))
         # Layer 2
-        e2 = blocks[1].edata['stim'].unsqueeze(-1)  # shape [E1,1]
+        e2 = blocks[1].edata['stim'].unsqueeze(-1) * stim_scale # shape [E1,1]
         h = F.relu(self.norm2(self.conv2(blocks[1], h, e2)))
         # Layer 3
-        e3 = blocks[2].edata['stim'].unsqueeze(-1)  # shape [E2,1]
+        e3 = blocks[2].edata['stim'].unsqueeze(-1) * stim_scale # shape [E2,1]
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def save_ckpt(model, feat_mean, feat_std, best_val: bool = False, path: str = "checkpoints/"):
+def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
         ckpt_name = f"checkpoint_best.pth"
     else:
@@ -108,10 +111,74 @@ def save_ckpt(model, feat_mean, feat_std, best_val: bool = False, path: str = "c
     path = path + ckpt_name
     torch.save({
     "model_state": model.state_dict(),
-    "feat_mean": feat_mean.cpu(),
-    "feat_std": feat_std.cpu(),
+    "stim_scale": stim_scale,
     }, path)
     logging.info(f"Checkpoint saved to {path}")
+
+def norm_feats(feats):
+    feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
+    feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
+    feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
+
+    # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
+    feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
+    return feats
+
+def smoothness_loss_on_block(last_block, pred_dst, sigma_src=None, sigma_dst=None, lam=1e-3):
+    """
+    Dirichlet energy on edges whose BOTH endpoints are in last_block.dstnodes().
+    last_block : DGLBlock (the last one)
+    pred_dst   : (N_dst, 1) tensor — model output for dst nodes of last_block
+    sigma_src  : optional (N_src,) tensor from last_block.srcdata[...] for weighting
+    sigma_dst  : optional (N_dst,) tensor from last_block.dstdata[...] for weighting
+    lam        : regularization strength
+
+    returns: scalar smoothness loss (already multiplied by lam)
+    """
+    B = last_block
+    # Local → global ids
+    srcNID = B.srcdata[dgl.NID]  # (N_src,)
+    dstNID = B.dstdata[dgl.NID]  # (N_dst,)
+
+    # Edges (u in src space, v in dst space)
+    u, v = B.edges()  # local indices
+
+    # --- keep only edges whose src endpoint ALSO lies in dst set ---
+    # Build vectorized map from global id -> dst local index
+    dstNID_sorted, inv = torch.sort(dstNID)              # inv maps sorted positions -> original dst index
+    pos = torch.searchsorted(dstNID_sorted, srcNID[u])   # candidate positions for each src global id
+    match = (pos < dstNID_sorted.numel()) & (dstNID_sorted[pos] == srcNID[u])
+    if not torch.any(match):
+        return pred_dst.new_zeros(())
+
+    # Local dst indices for u endpoints (that are also dst nodes)
+    u_local = inv[pos[match]]           # local dst indices
+    v_local = v[match]                  # already local dst indices
+
+    # Optional: avoid double-counting on bidirected graphs (keep one direction)
+    # Use global ids to pick an orientation
+    keep = (srcNID[u[match]] < dstNID[v[match]])
+    u_local = u_local[keep]
+    v_local = v_local[keep]
+    if u_local.numel() == 0:
+        return pred_dst.new_zeros(())
+
+    # Gather predictions
+    phi_u = pred_dst[u_local].squeeze(-1)
+    phi_v = pred_dst[v_local].squeeze(-1)
+
+    # Weights
+    if sigma_src is not None and sigma_dst is not None:
+        # sigma_* should be 1-D tensors aligned to last_block.src/dst nodes
+        # Project to the selected edge endpoints:
+        w_e = 0.5 * ( sigma_src[u[match][keep]] + sigma_dst[v[match][keep]] )
+        w_e = w_e.to(phi_u.dtype)
+    else:
+        w_e = torch.ones_like(phi_u)
+
+    # Dirichlet energy on this frontier (mean normalizes by batch size)
+    smooth = (w_e * (phi_u - phi_v).pow(2)).mean()
+    return lam * smooth
 
 print("Start training process")
 print("Loading graph and initializing model...")
@@ -147,12 +214,11 @@ g = loaded_graphs[0]
 os.makedirs("checkpoints", exist_ok=True)
 logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
 
-g.ndata['feat'] = g.ndata['feat'][:, 0:6] # 7th feature would be volume which is not needed yet
+g.ndata['feat'] = g.ndata['feat'][:, 0:6].to(torch.float32) # 7th feature would be volume which is not needed yet
 feat_mean = g.ndata['feat'].mean(0)
+feat_mean = feat_mean.to(device, dtype=g.ndata['feat'].dtype)
 feat_std = g.ndata['feat'].std(0).clamp_min(1e-12)
-g.ndata['feat'] = (g.ndata['feat'] - feat_mean) / feat_std
-
-g.edata['stim'] = g.edata['stim'] * stim_scale
+feat_std  = feat_std.to(device, dtype=g.ndata['feat'].dtype)
 
 fm = feat_mean.cpu().numpy()
 fs = feat_std.cpu().numpy()
@@ -167,8 +233,8 @@ for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
     logging.info(f"{name} range: min {float(g.ndata['feat'][:,i].amin())}, "
                  f"max {float(g.ndata['feat'][:,i].amax())}")
 
-logging.info(f"I stim scaled range: min {float(g.edata['stim'].amin())}, "
-             f"max {float(g.edata['stim'].amax())}")
+logging.info(f"I stim range: min {float(g.edata['stim'].amin()) * stim_scale}, "
+             f"max {float(g.edata['stim'].amax()) * stim_scale}")
 
 logging.info(f"Potential range: min {float(g.ndata['label'].amin())}, "
              f"max {float(g.ndata['label'].amax())}")
@@ -223,16 +289,28 @@ print("Starting warmup training loop...")
 
 for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
     model.train()
-    total_train_loss, n_train_batches = 0.0, 0
+    total_train_loss, total_data_loss, total_smooth_loss, n_train_batches = 0.0, 0, 0, 0
     # Warmup Training loop
     for step, (input_nodes, output_nodes, blocks) in enumerate(islice(train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
         x = blocks[0].srcdata['feat']
         y = blocks[-1].dstdata['label']
+        
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            x = norm_feats(x)
             pred = model(blocks, x)
-            loss = loss_fn_warmup(pred, y)
+            data_loss = loss_fn_warmup(pred, y)
 
+        smooth_loss = smoothness_loss_on_block(
+            blocks[-1], 
+            pred, 
+            sigma_src=blocks[-1].srcdata['feat'][:, 3:6].mean(dim=1), 
+            sigma_dst=blocks[-1].dstdata['feat'][:, 3:6].mean(dim=1), 
+            lam=1e-3  # start with 1e-3
+        )
+        print(f"Data Loss: {data_loss.item():.4f}, Smooth Loss: {smooth_loss.item():.4f}")
+
+        loss = data_loss + smooth_loss
         optimizer_warmup.zero_grad(set_to_none=True)
         if scaler_warmup.is_enabled():
             scaler_warmup.scale(loss).backward()
@@ -242,6 +320,8 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
             loss.backward()
             optimizer_warmup.step()
         total_train_loss += loss.item()
+        total_data_loss += data_loss.item()
+        total_smooth_loss += smooth_loss.item()
         n_train_batches += 1
 
     # Warmup Validation loop
@@ -253,6 +333,7 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
                 blocks = [b.to(device) for b in blocks]
                 x = blocks[0].srcdata['feat']
                 y = blocks[-1].dstdata['label']
+                x = norm_feats(x)
                 pred = model(blocks, x)
                 loss = loss_fn_warmup(pred, y)
                 total_val_loss += loss.item()
@@ -263,9 +344,9 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
 
     avg_train = total_train_loss / max(1, n_train_batches)
 
-    val_loss_str = f"Val Loss: {avg_val:.4f} " if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = f"Val Loss: {avg_val:.6f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[Warmup] Epoch {epoch+1}/{epochs_warmup}  "
-          f"Train Loss: {avg_train:.4f}  "
+          f"Train Loss: {avg_train:.6f}  "
           f"{val_loss_str}"
           f"LR: {optimizer_warmup.param_groups[0]['lr']:.2e}")
 
@@ -288,6 +369,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         w = w * (1.0 + blocks[-1].dstdata['w_dist'].unsqueeze(-1).to(x.dtype))
         
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            x = norm_feats(x)
             pred = model(blocks, x)
             loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
 
@@ -315,7 +397,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
                 y = blocks[-1].dstdata['label']
                 w = blocks[-1].dstdata['w_pot'].unsqueeze(-1).to(x.dtype)
                 w = w * (1.0 + blocks[-1].dstdata['w_dist'].unsqueeze(-1).to(x.dtype))
-
+                x = norm_feats(x)
                 pred = model(blocks, x)
 
                 loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
@@ -328,16 +410,16 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         if avg_val < best_val - 1e-9:
             best_val = avg_val
             logging.info(f"New best validation loss: {best_val:.4f} at epoch {epoch+1}")
-            save_ckpt(model, feat_mean, feat_std, True)
+            save_ckpt(model, stim_scale, True)
 
     avg_train = total_train_loss / max(1, n_train_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
-        save_ckpt(model, feat_mean, feat_std, False)
+        save_ckpt(model, stim_scale, False)
 
-    val_loss_str = f"Val Loss: {avg_val:.4f} " if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = f"Val Loss: {avg_val:.8f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
-          f"Train Loss: {avg_train:.4f} "
+          f"Train Loss: {avg_train:.8f} "
           f"{val_loss_str}"
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
     
@@ -347,8 +429,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-    "feat_mean": feat_mean.cpu(),
-    "feat_std": feat_std.cpu(),
-}, "trained_gnn_NNConv.pth")
+    "stim_scale": stim_scale,
+}, "trained_gnn_NNConv_v3.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_v3.pth")
