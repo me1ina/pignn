@@ -94,6 +94,8 @@ g = loaded_graphs[0]
 model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
 ckpt = torch.load(model_name, map_location=device)
 model.load_state_dict(ckpt["model_state"])
+
+g.ndata['feat'] = g.ndata['feat'][:, 0:in_feats] # 7th feature would be volume which is not needed yet
 feat_mean = ckpt["feat_mean"].to(g.ndata['feat'].dtype)
 feat_std  = ckpt["feat_std"].to(g.ndata['feat'].dtype)
 
