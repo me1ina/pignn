@@ -108,8 +108,6 @@ ckpt = torch.load(model_name, map_location=device)
 model.load_state_dict(ckpt["model_state"])
 
 g.ndata['feat'] = g.ndata['feat'][:, 0:in_feats] # 7th feature would be volume which is not needed yet
-stim_scale = ckpt["stim_scale"].to(g.ndata['feat'].device, dtype=g.ndata['feat'].dtype)
-
 
 nids = torch.arange(g.num_nodes(), dtype=torch.int64)
 sampler = NeighborSampler(
