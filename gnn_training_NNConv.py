@@ -165,19 +165,19 @@ logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
 g.ndata['feat'] = g.ndata['feat'][:, 0:6].to(torch.float32) # 7th feature would be volume which is not needed yet
 
 for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
-    min = float(g.ndata['feat'][:,i].amin())
-    max = float(g.ndata['feat'][:,i].amax())
-    logging.info(f"{name} range: min {min}, max {max}")
+    min_val = float(g.ndata['feat'][:,i].amin())
+    max_val = float(g.ndata['feat'][:,i].amax())
+    logging.info(f"{name} range: min {min_val}, max {max_val}")
     if i < 2:
-        min = min/coord_max
-        max = max/coord_max
+        min_val = min_val/coord_max
+        max_val = max_val/coord_max
     elif i == 2:
-        min = (min - z_center)/z_center
-        max = (max - z_center)/z_center
+        min_val = (min_val - z_center)/z_center
+        max_val = (max_val - z_center)/z_center
     else:
-        min = min/sigma_max
-        max = max/sigma_max
-    logging.info(f"{name} scaled range: min {min}, max {max}")
+        min_val = min_val/sigma_max
+        max_val = max_val/sigma_max
+    logging.info(f"{name} scaled range: min {min_val}, max {max_val}")
 
 logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
              f"max {float(g.edata['stim'].amax())}")
