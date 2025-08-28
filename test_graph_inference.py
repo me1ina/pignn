@@ -11,7 +11,10 @@ import time
 from tqdm import tqdm
 import logging
 
-
+coord_max = 35.0     # mm (x,y in [-33,33], z in [0,35])
+z_center = 17.5     # mm
+sigma_max = 2.0      # S/m
+stim_scale = 1.0 / (0.0066 * 2)   # maps ~0..0.0066 µA -> ~0..1 (or your final chosen value)
 class EdgeAwareGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim=1, aggregator='mean'):
         super().__init__()
@@ -45,17 +48,27 @@ class EdgeAwareGNN(nn.Module):
         x:     input node features for the src nodes of blocks[0]
         """
         # Layer 1
-        e1 = blocks[0].edata['stim'].unsqueeze(-1)  # shape [E0,1]
+        e1 = blocks[0].edata['stim'].unsqueeze(-1) * stim_scale  # shape [E0,1]
         h = F.relu(self.norm1(self.conv1(blocks[0], x, e1)))
         # Layer 2
-        e2 = blocks[1].edata['stim'].unsqueeze(-1)  # shape [E1,1]
+        e2 = blocks[1].edata['stim'].unsqueeze(-1) * stim_scale  # shape [E1,1]
         h = F.relu(self.norm2(self.conv2(blocks[1], h, e2)))
         # Layer 3
-        e3 = blocks[2].edata['stim'].unsqueeze(-1)  # shape [E2,1]
+        e3 = blocks[2].edata['stim'].unsqueeze(-1) * stim_scale  # shape [E2,1]
         return F.softplus(self.conv3(blocks[2], h, e3))
+    
+
+def norm_feats(feats):
+    feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
+    feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
+    feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
+
+    # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
+    feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
+    return feats
 
 inference_graph_name = "mesh_graph_vol_area.dgl"
-model_name = "trained_gnn_NNConv.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
+model_name = "trained_gnn_NNConv_v3.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
 
 in_feats = 6
 hidden_feats = 64
@@ -64,7 +77,6 @@ edge_feat_dim = 1
 num_workers = 2
 fanouts=(15,10,3)
 batch_size=2048
-stim_scale = 1/0.0066
 
 logging.basicConfig(
     filename='inference.log',
@@ -96,12 +108,8 @@ ckpt = torch.load(model_name, map_location=device)
 model.load_state_dict(ckpt["model_state"])
 
 g.ndata['feat'] = g.ndata['feat'][:, 0:in_feats] # 7th feature would be volume which is not needed yet
-feats = g.ndata['feat']
-feat_mean = ckpt["feat_mean"].to(feats.device, dtype=feats.dtype)
-feat_std  = ckpt["feat_std"].to(feats.device, dtype=feats.dtype)
+stim_scale = ckpt["stim_scale"].to(g.ndata['feat'].device, dtype=g.ndata['feat'].dtype)
 
-g.ndata['feat'] = (g.ndata['feat'] - feat_mean) / (feat_std + 1e-12)
-g.edata['stim'] = g.edata['stim'] * stim_scale
 
 nids = torch.arange(g.num_nodes(), dtype=torch.int64)
 sampler = NeighborSampler(
@@ -131,12 +139,7 @@ with torch.no_grad():
     for input_nodes, output_nodes, blocks in tqdm(loader, desc="Inference"):
         blocks = [b.to(device) for b in blocks]
 
-        for i, b in enumerate(blocks):
-            s = b.edata['stim']
-            print(f"block {i}: stim>0 = {int((s > 0).sum())}, "
-                f"min={float(s.min())}, max={float(s.max())}, mean={float(s.mean())}")
-            
-        x_b = blocks[0].srcdata['feat'][:, :in_feats]
+        x_b = norm_feats(blocks[0].srcdata['feat'][:, :in_feats])
         with autocast_ctx:
             y_b = model(blocks, x_b)  # [N_dst, 1]
         preds[output_nodes] = y_b.detach().float().cpu()
