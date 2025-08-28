@@ -21,7 +21,7 @@ logging.basicConfig(
 in_feats = 6
 hidden_feats = 64
 out_feats = 1
-edge_feat_dim = 1
+edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 epochs_warmup = 20
@@ -61,8 +61,12 @@ logging.info(f"stim_scale        : {stim_scale}")
 logging.info(f"alpha_for_weights : {alpha_for_weights}")
 logging.info("================================\n")
 
+def edge_feats(b):
+    s = (b.edata['stim'] * stim_scale).unsqueeze(-1)
+    ones = torch.ones_like(s)
+    return torch.cat([s, ones], dim=-1) 
 class EdgeAwareGNN(nn.Module):
-    def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim=1, aggregator='sum'):
+    def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim, aggregator='mean'):
         super().__init__()
         # Layer 1: in_feats → hidden_feats
         self.edge_mlp1 = nn.Sequential(
@@ -94,13 +98,13 @@ class EdgeAwareGNN(nn.Module):
         x:     input node features for the src nodes of blocks[0]
         """
         # Layer 1
-        e1 = blocks[0].edata['stim'].unsqueeze(-1) * stim_scale # shape [E0,1]
+        e1 = edge_feats(blocks[0])
         h = F.relu(self.norm1(self.conv1(blocks[0], x, e1)))
         # Layer 2
-        e2 = blocks[1].edata['stim'].unsqueeze(-1) * stim_scale # shape [E1,1]
+        e2 = edge_feats(blocks[1])
         h = F.relu(self.norm2(self.conv2(blocks[1], h, e2)))
         # Layer 3
-        e3 = blocks[2].edata['stim'].unsqueeze(-1) * stim_scale # shape [E2,1]
+        e3 = edge_feats(blocks[2])
         return F.softplus(self.conv3(blocks[2], h, e3))
 
 def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoints/"):
@@ -138,7 +142,7 @@ if is_ampere_plus:
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
+model = EdgeAwareGNN(in_feats, hidden_feats, out_feats, edge_feat_dim).to(device)
 
 # Prefer BF16 if supported (more stable), else fall back to FP16
 use_bf16 = use_cuda and torch.cuda.is_bf16_supported()
@@ -161,8 +165,19 @@ logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
 g.ndata['feat'] = g.ndata['feat'][:, 0:6].to(torch.float32) # 7th feature would be volume which is not needed yet
 
 for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
-    logging.info(f"{name} range: min {float(g.ndata['feat'][:,i].amin())}, "
-                 f"max {float(g.ndata['feat'][:,i].amax())}")
+    min = float(g.ndata['feat'][:,i].amin())
+    max = float(g.ndata['feat'][:,i].amax())
+    logging.info(f"{name} range: min {min}, max {max}")
+    if i < 2:
+        min = min/coord_max
+        max = max/coord_max
+    elif i == 2:
+        min = (min - z_center)/z_center
+        max = (max - z_center)/z_center
+    else:
+        min = min/sigma_max
+        max = max/sigma_max
+    logging.info(f"{name} scaled range: min {min}, max {max}")
 
 logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
              f"max {float(g.edata['stim'].amax())}")
