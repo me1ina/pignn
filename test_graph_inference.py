@@ -15,8 +15,13 @@ coord_max = 35.0     # mm (x,y in [-33,33], z in [0,35])
 z_center = 17.5     # mm
 sigma_max = 2.0      # S/m
 stim_scale = 1.0 / (0.0066 * 2)   # maps ~0..0.0066 µA -> ~0..1 (or your final chosen value)
+
+def edge_feats(b):
+    s = (b.edata['stim'] * stim_scale).unsqueeze(-1)
+    ones = torch.ones_like(s)
+    return torch.cat([s, ones], dim=-1) 
 class EdgeAwareGNN(nn.Module):
-    def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim=1, aggregator='mean'):
+    def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim, aggregator='mean'):
         super().__init__()
         # Layer 1: in_feats → hidden_feats
         self.edge_mlp1 = nn.Sequential(
@@ -48,13 +53,13 @@ class EdgeAwareGNN(nn.Module):
         x:     input node features for the src nodes of blocks[0]
         """
         # Layer 1
-        e1 = blocks[0].edata['stim'].unsqueeze(-1) * stim_scale  # shape [E0,1]
+        e1 = edge_feats(blocks[0])  # shape [E0,2]
         h = F.relu(self.norm1(self.conv1(blocks[0], x, e1)))
         # Layer 2
-        e2 = blocks[1].edata['stim'].unsqueeze(-1) * stim_scale  # shape [E1,1]
+        e2 = edge_feats(blocks[1])  # shape [E1,2]
         h = F.relu(self.norm2(self.conv2(blocks[1], h, e2)))
         # Layer 3
-        e3 = blocks[2].edata['stim'].unsqueeze(-1) * stim_scale  # shape [E2,1]
+        e3 = edge_feats(blocks[2])  # shape [E2,2]
         return F.softplus(self.conv3(blocks[2], h, e3))
     
 
@@ -73,7 +78,7 @@ model_name = "trained_gnn_NNConv_v3.pth"#"trained_gnn_combi_loss_seperated_test.
 in_feats = 6
 hidden_feats = 64
 out_feats = 1
-edge_feat_dim = 1
+edge_feat_dim = 2
 num_workers = 2
 fanouts=(15,10,3)
 batch_size=2048
@@ -103,7 +108,7 @@ else:
 loaded_graphs, _ = dgl.load_graphs(inference_graph_name)
 g = loaded_graphs[0]
 
-model = EdgeAwareGNN(in_feats, hidden_feats, out_feats).to(device)
+model = EdgeAwareGNN(in_feats, hidden_feats, out_feats, edge_feat_dim).to(device)
 ckpt = torch.load(model_name, map_location=device)
 model.load_state_dict(ckpt["model_state"])
 
