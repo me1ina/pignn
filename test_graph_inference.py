@@ -73,7 +73,7 @@ def norm_feats(feats):
     return feats
 
 inference_graph_name = "mesh_graph_vol_area.dgl"
-model_name = "trained_gnn_NNConv_v3.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
+model_name = "trained_gnn_NNConv_v4.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
 
 in_feats = 6
 hidden_feats = 64
