@@ -119,10 +119,17 @@ def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoint
     }, path)
     logging.info(f"Checkpoint saved to {path}")
 
-def norm_feats(feats):
-    feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
-    feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
-    feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
+def get_stim_center(g):
+    eids = (g.edata['stim'] != 0).nonzero(as_tuple=False).view(-1)
+    u, v = g.find_edges(eids)
+    stim_nodes = torch.unique(torch.cat([u, v]))
+    return g.ndata['feat'][stim_nodes, :3].mean(0)  # xyz in mm
+
+def norm_feats(feats, stim_center):
+    feats[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max 
+    #feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
+    #feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
+    #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
 
     # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
@@ -202,6 +209,8 @@ g.ndata['w_dist'] = w_dist
 
 g.ndata['w_pot'] = 1 + alpha_for_weights * (g.ndata['label'] / g.ndata['label'].max())
 
+stim_center = get_stim_center(g)
+
 # Split node IDs into train / validation 
 all_nids = torch.arange(g.num_nodes())
 perm = torch.randperm(len(all_nids))
@@ -231,7 +240,7 @@ scheduler_warmup = ReduceLROnPlateau(optimizer_warmup, mode='min', factor=0.5, p
 loss_fn_warmup = nn.L1Loss()
 
 optimizer_data_loss = torch.optim.Adam(model.parameters(), lr=data_loss_lr)
-scheduler_data_loss = ReduceLROnPlateau(optimizer_data_loss, mode='min', factor=0.5, patience=data_loss_patience)
+scheduler_data_loss = ReduceLROnPlateau(optimizer_data_loss, mode='min', factor=0.1, patience=data_loss_patience)
 
 print("Graph loaded and dataloader initialized.")
 print("Starting warmup training loop...")
@@ -246,7 +255,7 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
         y = blocks[-1].dstdata['label']
         
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
-            x = norm_feats(x)
+            x = norm_feats(x, stim_center)
             pred = model(blocks, x)
             loss = loss_fn_warmup(pred, y)
 
@@ -270,7 +279,7 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
                 blocks = [b.to(device) for b in blocks]
                 x = blocks[0].srcdata['feat']
                 y = blocks[-1].dstdata['label']
-                x = norm_feats(x)
+                x = norm_feats(x, stim_center)
                 pred = model(blocks, x)
                 loss = loss_fn_warmup(pred, y)
                 total_val_loss += loss.item()
@@ -306,7 +315,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         w = w * (1.0 + blocks[-1].dstdata['w_dist'].unsqueeze(-1).to(x.dtype))
         
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
-            x = norm_feats(x)
+            x = norm_feats(x, stim_center)
             pred = model(blocks, x)
             loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
 
@@ -334,7 +343,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
                 y = blocks[-1].dstdata['label']
                 w = blocks[-1].dstdata['w_pot'].unsqueeze(-1).to(x.dtype)
                 w = w * (1.0 + blocks[-1].dstdata['w_dist'].unsqueeze(-1).to(x.dtype))
-                x = norm_feats(x)
+                x = norm_feats(x, stim_center)
                 pred = model(blocks, x)
 
                 loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
