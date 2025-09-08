@@ -79,7 +79,7 @@ def norm_feats(feats, stim_center):
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
 
-inference_graph_name = "mesh_graph_vol_area.dgl"
+inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
 model_name = "checkpoints/checkpoint_best.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
 
 in_feats = 6
@@ -161,6 +161,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_test_VagusA1924_HC0_AS1.dgl", [g])
-logging.info("Graph saved to inference_gnn_test_VagusA1924_HC0_AS1.dgl")
+dgl.save_graphs("inference_gnn_test_VagusA1924_HC0_AS7.dgl", [g])
+logging.info("Graph saved to inference_gnn_test_VagusA1924_HC0_AS7.dgl")
 
