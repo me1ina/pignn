@@ -120,7 +120,7 @@ def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoint
     logging.info(f"Checkpoint saved to {path}")
 
 def get_stim_center(g):
-    eids = (g.edata['stim'] != 0).nonzero(as_tuple=False).view(-1)
+    eids = (g.edata['stim'] != 0).nonzero(as_tuple=False).reshape(-1)
     u, v = g.find_edges(eids)
     stim_nodes = torch.unique(torch.cat([u, v]))
     return g.ndata['feat'][stim_nodes, :3].mean(0)  # xyz in mm
