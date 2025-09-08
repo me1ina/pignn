@@ -63,17 +63,24 @@ class EdgeAwareGNN(nn.Module):
         return F.softplus(self.conv3(blocks[2], h, e3))
     
 
-def norm_feats(feats):
-    feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
-    feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
-    feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
+def get_stim_center(g):
+    eids = (g.edata['stim'] != 0).nonzero(as_tuple=False).reshape(-1)
+    u, v = g.find_edges(eids)
+    stim_nodes = torch.unique(torch.cat([u, v]))
+    return g.ndata['feat'][stim_nodes, :3].mean(0)  # xyz in mm
+
+def norm_feats(feats, stim_center):
+    feats[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max 
+    #feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
+    #feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
+    #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
 
     # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
 
 inference_graph_name = "mesh_graph_vol_area.dgl"
-model_name = "trained_gnn_NNConv_v4.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
+model_name = "checkpoints/checkpoint_best.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
 
 in_feats = 6
 hidden_feats = 64
@@ -107,6 +114,8 @@ else:
 
 loaded_graphs, _ = dgl.load_graphs(inference_graph_name)
 g = loaded_graphs[0]
+stim_center = get_stim_center(g)
+
 
 model = EdgeAwareGNN(in_feats, hidden_feats, out_feats, edge_feat_dim).to(device)
 ckpt = torch.load(model_name, map_location=device)
