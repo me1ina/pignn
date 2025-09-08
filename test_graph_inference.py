@@ -151,7 +151,7 @@ with torch.no_grad():
     for input_nodes, output_nodes, blocks in tqdm(loader, desc="Inference"):
         blocks = [b.to(device) for b in blocks]
 
-        x_b = norm_feats(blocks[0].srcdata['feat'][:, :in_feats])
+        x_b = norm_feats(blocks[0].srcdata['feat'][:, :in_feats], stim_center)
         with autocast_ctx:
             y_b = model(blocks, x_b)  # [N_dst, 1]
         preds[output_nodes] = y_b.detach().float().cpu()
