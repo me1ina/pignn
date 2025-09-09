@@ -24,14 +24,14 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-epochs_warmup = 2
+epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_data_loss = 20
+epochs_data_loss = 200
 data_loss_lr = 1e-4
 data_loss_patience = 3
 ckpt_epochs = 5
-validation_epochs = 2
+validation_epochs = 4
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
 stim_scale = 1/(0.0066 *2) # map µA to ~[0,1]
@@ -131,7 +131,7 @@ def norm_feats(feats, stim_center):
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
 
-def dirichlet_loss(pair_graph, blocks, pred_dst, lam=1e-3):
+def dirichlet_loss(pair_graph, blocks, pred_dst, lam=1):
     B = blocks[-1]
     # map pair_graph nodes -> local dst indices
     pgNID  = pair_graph.ndata[dgl.NID]
@@ -425,6 +425,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 torch.save({
     "model_state": model.state_dict(),
     "stim_scale": stim_scale,
-}, "trained_gnn_NNConv_dirichlet_v1.pth")
+}, "trained_gnn_NNConv_dirichlet_v2.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_dirichlet_v1.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_dirichlet_v2.pth")
