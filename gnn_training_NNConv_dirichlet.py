@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import dgl
 import logging
-from dgl.dataloading import NeighborSampler, DataLoader
+from dgl.dataloading import NeighborSampler, DataLoader, as_edge_prediction_sampler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from dgl.nn import NNConv
 from tqdm import tqdm
@@ -24,14 +24,14 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-epochs_warmup = 20
+epochs_warmup = 2
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_data_loss = 200
+epochs_data_loss = 20
 data_loss_lr = 1e-4
 data_loss_patience = 3
 ckpt_epochs = 5
-validation_epochs = 5
+validation_epochs = 2
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
 stim_scale = 1/(0.0066 *2) # map µA to ~[0,1]
@@ -64,7 +64,8 @@ logging.info("================================\n")
 def edge_feats(b):
     s = (b.edata['stim'] * stim_scale).unsqueeze(-1)
     ones = torch.ones_like(s)
-    return torch.cat([s, ones], dim=-1) 
+    return torch.cat([s, ones], dim=-1)
+
 class EdgeAwareGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim, aggregator='mean'):
         super().__init__()
@@ -127,13 +128,32 @@ def get_stim_center(g):
 
 def norm_feats(feats, stim_center):
     feats[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max 
-    #feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
-    #feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
-    #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
-
-    # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
+
+def dirichlet_loss(pair_graph, blocks, pred_dst, lam=1e-3):
+    B = blocks[-1]
+    # map pair_graph nodes -> local dst indices
+    pgNID  = pair_graph.ndata[dgl.NID]
+    dstNID = B.dstdata[dgl.NID]
+    dst_sorted, inv = torch.sort(dstNID)
+    pos = torch.searchsorted(dst_sorted, pgNID)
+    loc = inv[pos]                       # (N_pg_nodes,)
+
+    u_pg, v_pg = pair_graph.edges()
+    u_loc = loc[u_pg]; v_loc = loc[v_pg]
+
+    phi_u = pred_dst[u_loc].squeeze(-1)
+    phi_v = pred_dst[v_loc].squeeze(-1)
+
+    # optional conductivity weight (use the same units you trained with)
+    feat_dst = B.dstdata['feat']
+    sig_u = feat_dst[u_loc, 3:6].mean(dim=1)
+    sig_v = feat_dst[v_loc, 3:6].mean(dim=1)
+    w_e   = 0.5 * (sig_u + sig_v)
+    w_e   = w_e.to(phi_u.dtype)
+
+    return lam * (w_e * (phi_u - phi_v).pow(2)).mean()
 
 print("Start training process")
 print("Loading graph and initializing model...")
@@ -224,6 +244,8 @@ sampler = NeighborSampler(
     prefetch_node_feats=['feat', 'label', 'w_dist', 'w_pot'], 
     prefetch_edge_feats=['stim']
 )
+edge_sampler = as_edge_prediction_sampler(sampler)
+
 train_loader = DataLoader(
     g, train_nids, sampler,
     batch_size=batch_size, shuffle=True, drop_last=False,
@@ -232,6 +254,11 @@ train_loader = DataLoader(
 val_loader = DataLoader(
     g, val_nids, sampler,
     batch_size=batch_size, shuffle=False, drop_last=False,
+    num_workers=num_workers, persistent_workers=True
+)
+edge_loader = DataLoader(
+    g, train_nids, edge_sampler,
+    batch_size=batch_size, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 
@@ -330,8 +357,28 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         total_train_loss += loss.item()
         n_train_batches += 1
 
+    total_physics_loss, n_physics_batches = 0.0, 0
+    # PINN loop
+    for estep, (in_nodes_e, pair_graph, blocks_e) in enumerate(islice(edge_loader, steps_per_epoch)):
+        blocks_e = [b.to(device) for b in blocks_e]
+        x = blocks_e[0].srcdata['feat']
+        with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            x = norm_feats(x, stim_center)
+            pred = model(blocks_e, x)
+            loss = dirichlet_loss(pair_graph.to(device), blocks_e, pred, lam=1e-3)
+
+        optimizer_data_loss.zero_grad(set_to_none=True)
+        if scaler_data_loss.is_enabled():
+            scaler_data_loss.scale(loss).backward()
+            scaler_data_loss.step(optimizer_data_loss)
+            scaler_data_loss.update()
+        else:
+            loss.backward()
+            optimizer_data_loss.step()
+        total_physics_loss += loss.item()
+        n_physics_batches += 1
+
     # Validation loop
-    
     if (epoch + 1) % validation_epochs == 0:
         model.eval() 
         total_val_loss, n_val_batches = 0.0, 0
@@ -355,10 +402,11 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 
         if avg_val < best_val - 1e-9:
             best_val = avg_val
-            logging.info(f"New best validation loss: {best_val:.6f} at epoch {epoch+1}")
+            logging.info(f"New best validation loss: {best_val:.8f} at epoch {epoch+1}")
             save_ckpt(model, stim_scale, True)
 
     avg_train = total_train_loss / max(1, n_train_batches)
+    avg_physics = total_physics_loss / max(1, n_physics_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
         save_ckpt(model, stim_scale, False)
@@ -366,6 +414,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
     val_loss_str = f"Val Loss: {avg_val:.8f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
           f"Train Loss: {avg_train:.8f} "
+          f"Physics Loss: {avg_physics:.8f} "
           f"{val_loss_str}"
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
     
@@ -376,6 +425,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 torch.save({
     "model_state": model.state_dict(),
     "stim_scale": stim_scale,
-}, "trained_gnn_NNConv_v4.pth")
+}, "trained_gnn_NNConv_dirichlet_v1.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_v4.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_dirichlet_v1.pth")
