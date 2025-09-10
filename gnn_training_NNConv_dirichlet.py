@@ -383,7 +383,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         model.eval() 
         total_val_loss, n_val_batches = 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
-            for step, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch)):
+            for step, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch // 2)):
                 blocks = [b.to(device) for b in blocks]
                 
                 x = blocks[0].srcdata['feat']
