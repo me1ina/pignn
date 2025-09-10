@@ -24,10 +24,10 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-epochs_warmup = 2
+epochs_warmup = 0
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_data_loss = 20
+epochs_data_loss = 4
 data_loss_lr = 1e-4
 data_loss_patience = 3
 ckpt_epochs = 5
@@ -141,6 +141,13 @@ def laplace_physics_loss_block(block, potential):
     sigma  = block.srcdata['feat'][:, 3:6]
     I_stim   = block.edata['stim']
     face_areas   = block.edata['face_area']
+
+    print("coords shape:", coords.shape)
+    print("potential shape:", potential.shape)
+    print("src max/min:", src.max().item(), src.min().item())
+    print("dst max/min:", dst.max().item(), dst.min().item())
+    print("block num_src_nodes:", block.num_src_nodes())
+    print("block num_dst_nodes:", block.num_dst_nodes())
 
     # Map to local node features
     pot_src, pot_dst = potential[src], potential[dst]
