@@ -131,7 +131,7 @@ def norm_feats(feats, stim_center):
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
 
-def dirichlet_loss(pair_graph, blocks, pred_dst, lam=1):
+def dirichlet_loss(pair_graph, blocks, pred_dst, lam=1e1):
     B = blocks[-1]
     # map pair_graph nodes -> local dst indices
     pgNID  = pair_graph.ndata[dgl.NID]
