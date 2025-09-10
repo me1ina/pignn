@@ -387,7 +387,11 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x_norm)
-            loss = laplace_physics_loss_block(blocks[-1], pred)
+            # Build a tensor covering *all src nodes* in the last block
+            potential_block = torch.zeros(blocks[-1].num_src_nodes(), 1, device=pred.device)
+            # Assign the predictions into the right local positions
+            potential_block[blocks[-1].dstnodes()] = pred
+            loss = laplace_physics_loss_block(blocks[-1], potential_block)
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
