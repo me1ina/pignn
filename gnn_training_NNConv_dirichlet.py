@@ -359,7 +359,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 
     total_physics_loss, n_physics_batches = 0.0, 0
     # PINN loop
-    for estep, (in_nodes_e, pair_graph, blocks_e) in enumerate(islice(edge_loader, steps_per_epoch)):
+    for estep, (in_nodes_e, pair_graph, blocks_e) in enumerate(islice(edge_loader, steps_per_epoch // 2)):
         blocks_e = [b.to(device) for b in blocks_e]
         x = blocks_e[0].srcdata['feat']
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
@@ -383,7 +383,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         model.eval() 
         total_val_loss, n_val_batches = 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
-            for step, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch // 2)):
+            for step, (input_nodes, output_nodes, blocks) in enumerate(islice(val_loader, steps_per_epoch)):
                 blocks = [b.to(device) for b in blocks]
                 
                 x = blocks[0].srcdata['feat']
