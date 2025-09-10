@@ -133,9 +133,15 @@ def norm_feats(feats, stim_center):
     feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return feats
 
-def laplace_physics_loss_block(block, potential, sigma, coords, I_stim, face_areas):
+def laplace_physics_loss_block(block, potential):
   # Edge endpoints in *local IDs*
     src, dst = block.edges()
+
+    coords = block.srcdata['feat'][:, 0:3]
+    sigma  = block.srcdata['feat'][:, 3:6]
+    I_stim   = block.edata['stim']
+    face_areas   = block.edata['face_area']
+
     # Map to local node features
     pot_src, pot_dst = potential[src], potential[dst]
     delta_V = pot_src - pot_dst
@@ -372,15 +378,9 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         x = blocks[0].srcdata['feat']
         x_norm = norm_feats(x, stim_center)
 
-        feat_src = blocks[-1].srcdata['feat']
-        sigma_block  = feat_src[:, 3:6]
-        coords_block = feat_src[:, 0:3]
-        stim_block  = blocks[-1].edata['stim']
-        area_block  = blocks[-1].edata['face_area']
-
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x_norm)
-            loss = laplace_physics_loss_block(blocks[-1], pred, sigma_block, coords_block, stim_block, area_block)
+            loss = laplace_physics_loss_block(blocks[-1], pred)
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
