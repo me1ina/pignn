@@ -144,14 +144,15 @@ def laplace_physics_loss_block(block, potential):
 
     print("coords shape:", coords.shape)
     print("potential shape:", potential.shape)
-    print("src max/min:", src.max().item(), src.min().item())
-    print("dst max/min:", dst.max().item(), dst.min().item())
-    print("block num_src_nodes:", block.num_src_nodes())
-    print("block num_dst_nodes:", block.num_dst_nodes())
+    print("sigma shape:", sigma.shape)
+    print("I_stim shape:", I_stim.shape)
+    print("face_areas shape:", face_areas.shape)
 
     # Map to local node features
     pot_src, pot_dst = potential[src], potential[dst]
     delta_V = pot_src - pot_dst
+
+    print("delta_V shape:", delta_V.shape)
 
     delta_x = coords[src] - coords[dst]
     dist = torch.norm(delta_x, dim=1, keepdim=True)
@@ -159,6 +160,8 @@ def laplace_physics_loss_block(block, potential):
 
     sigma_eff = sigma[src] * ((delta_x * 1e-3) ** 2)
     sigma_eff = sigma_eff.sum(dim=1, keepdim=True) / (dist_sq * 1e-6 + 1e-12)
+
+    print("sigma_eff shape:", sigma_eff.shape)
 
     flux_density = sigma_eff * delta_V / (dist + 1e-12)
     flux_current = flux_density * face_areas
