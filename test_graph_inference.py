@@ -80,7 +80,13 @@ def norm_feats(feats, stim_center):
     return feats
 
 inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
-model_name = "checkpoints/checkpoint_best.pth"#"trained_gnn_combi_loss_seperated_test.pth" 
+#inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
+#inference_graph_name = "graph_area_VagusAA1924_HT60_AS1.1.dgl"
+#inference_graph_name = "graph_area_VagusAA1924_HC0_AS1.7.dgl"
+#inference_graph_name = "mesh_graph_vol_area.dgl"
+#inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
+model_name = "trained_gnn_NNConv_dirichlet_v2.pth"
+#model_name = "trained_gnn_NNConv_laplace_v1.pth" 
 
 in_feats = 6
 hidden_feats = 64
@@ -161,6 +167,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_test_VagusA6050_HC0_AS1.dgl", [g])
-logging.info("Graph saved to inference_gnn_test_VagusA6050_HC0_AS1.dgl")
+dgl.save_graphs("inference_gnn_test_dirichlet_VagusA6050_HC0_AS1.dgl", [g])
+logging.info("Graph saved to inference_gnn_test_dirichlet_VagusA6050_HC0_AS1.dgl")
 
