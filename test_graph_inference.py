@@ -81,8 +81,8 @@ def norm_feats(feats, stim_center):
 
 #inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
-inference_graph_name = "graph_area_VagusAA1924_HT60_AS1.1.dgl"
-#inference_graph_name = "graph_area_VagusAA1924_HC0_AS1.7.dgl"
+inference_graph_name = "graph_area_VagusA1924_HT60_AS1.1.dgl"
+#inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
 #inference_graph_name = "mesh_graph_vol_area.dgl"
 #inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 model_name = "trained_gnn_NNConv_dirichlet_v2.pth"
