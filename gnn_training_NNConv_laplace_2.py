@@ -30,6 +30,9 @@ warmup_patience = 2
 epochs_data_loss = 200
 data_loss_lr = 1e-4
 data_loss_patience = 3
+epochs_physics_loss = 200
+physics_loss_lr = 1e-5
+physics_loss_patience = 3
 ckpt_epochs = 5
 validation_epochs = 4
 steps_per_epoch = 2000
@@ -110,15 +113,14 @@ class EdgeAwareGNN(nn.Module):
         e3 = edge_feats(blocks[2])
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoints/"):
+def save_ckpt(model, train_str, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
-        ckpt_name = f"checkpoint_best.pth"
+        ckpt_name = f"checkpoint_{train_str}_best.pth"
     else:
-        ckpt_name = f"checkpoint_epoch_last.pth"
+        ckpt_name = f"checkpoint_{train_str}_epoch_last.pth"
     path = path + ckpt_name
     torch.save({
-    "model_state": model.state_dict(),
-    "stim_scale": stim_scale,
+    "model_state": model.state_dict()
     }, path)
     logging.info(f"Checkpoint saved to {path}")
 
@@ -190,6 +192,7 @@ use_bf16 = use_cuda and torch.cuda.is_bf16_supported()
 amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
 scaler_warmup    = torch.cuda.amp.GradScaler(enabled=not use_bf16)  # no scaling needed for BF16
 scaler_data_loss = torch.cuda.amp.GradScaler(enabled=not use_bf16)
+scaler_physics_loss = torch.cuda.amp.GradScaler(enabled=not use_bf16)
 
 logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus}\n"
              f"AMP dtype={'bf16' if use_bf16 else 'fp16' if use_cuda else 'cpu'}\n"
@@ -197,7 +200,6 @@ logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus}\n"
 
 loaded_graphs, _ = dgl.load_graphs("mesh_graph_vol_area.dgl")
 g = loaded_graphs[0]
-#g = dgl.to_bidirected(g, copy_ndata=True)
 
 #create checkpoint directory
 os.makedirs("checkpoints", exist_ok=True)
@@ -275,6 +277,11 @@ physics_loader = DataLoader(
     batch_size=batch_size, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
+physics_val_loader = DataLoader(
+    g, val_nids, physics_sampler,
+    batch_size=batch_size, shuffle=False, drop_last=False,
+    num_workers=num_workers, persistent_workers=True
+)
 
 optimizer_warmup = torch.optim.Adam(model.parameters(), lr=warmup_lr)
 scheduler_warmup = ReduceLROnPlateau(optimizer_warmup, mode='min', factor=0.5, patience=warmup_patience)
@@ -282,6 +289,10 @@ loss_fn_warmup = nn.L1Loss()
 
 optimizer_data_loss = torch.optim.Adam(model.parameters(), lr=data_loss_lr)
 scheduler_data_loss = ReduceLROnPlateau(optimizer_data_loss, mode='min', factor=0.1, patience=data_loss_patience)
+
+optimizer_physics_loss = torch.optim.Adam(model.parameters(), lr=physics_loss_lr)
+scheduler_physics_loss = ReduceLROnPlateau(optimizer_physics_loss, mode='min', factor=0.1, patience=physics_loss_patience)
+
 
 print("Graph loaded and dataloader initialized.")
 print("Starting warmup training loop...")
@@ -371,32 +382,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         total_train_loss += loss.item()
         n_train_batches += 1
 
-    total_physics_loss, n_physics_batches = 0.0, 0
-    # PINN loop
-    for estep, (input_nodes, output_nodes, blocks) in enumerate(islice(physics_loader, steps_per_epoch_physics)):
-        blocks = [b.to(device) for b in blocks]
-        x = blocks[0].srcdata['feat']
-        x_norm = norm_feats(x, stim_center)
-
-        with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
-            pred = model(blocks, x_norm)
-            # Build a tensor covering *all src nodes* in the last block
-            potential_block = torch.zeros(blocks[-1].num_src_nodes(), 1, device=pred.device)
-            # Assign the predictions into the right local positions
-            potential_block[blocks[-1].dstnodes()] = pred
-            loss = laplace_physics_loss_block(blocks[-1], potential_block)
-
-        optimizer_data_loss.zero_grad(set_to_none=True)
-        if scaler_data_loss.is_enabled():
-            scaler_data_loss.scale(loss).backward()
-            scaler_data_loss.step(optimizer_data_loss)
-            scaler_data_loss.update()
-        else:
-            loss.backward()
-            optimizer_data_loss.step()
-        total_physics_loss += loss.item()
-        n_physics_batches += 1
-
     # Validation loop
     if (epoch + 1) % validation_epochs == 0:
         model.eval() 
@@ -422,17 +407,79 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         if avg_val < best_val - 1e-9:
             best_val = avg_val
             logging.info(f"New best validation loss: {best_val:.8f} at epoch {epoch+1}")
-            save_ckpt(model, stim_scale, True)
+            save_ckpt(model, "data_loss", True)
 
     avg_train = total_train_loss / max(1, n_train_batches)
-    avg_physics = total_physics_loss / max(1, n_physics_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
-        save_ckpt(model, stim_scale, False)
+        save_ckpt(model, "data_loss", False)
 
     val_loss_str = f"Val Loss: {avg_val:.8f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
           f"Train Loss: {avg_train:.8f} "
+          f"{val_loss_str}"
+          f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
+    
+    print(msg)
+    logging.info(msg)
+
+for epoch in tqdm(range(epochs_physics_loss), desc="Physics Loss Training"):
+    model.train()
+    total_physics_loss, n_physics_batches = 0.0, 0
+    # PINN loop
+    for estep, (input_nodes, output_nodes, blocks) in enumerate(islice(physics_loader, steps_per_epoch_physics)):
+        blocks = [b.to(device) for b in blocks]
+        x = blocks[0].srcdata['feat']
+        x_norm = norm_feats(x, stim_center)
+
+        with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            pred = model(blocks, x_norm)
+            potential_block = torch.zeros(blocks[-1].num_src_nodes(), 1, device=pred.device)
+            potential_block[blocks[-1].dstnodes()] = pred
+            loss = laplace_physics_loss_block(blocks[-1], potential_block)
+
+        optimizer_physics_loss.zero_grad(set_to_none=True)
+        if scaler_physics_loss.is_enabled():
+            scaler_physics_loss.scale(loss).backward()
+            scaler_physics_loss.step(optimizer_physics_loss)
+            scaler_physics_loss.update()
+        else:
+            loss.backward()
+            optimizer_physics_loss.step()
+        total_physics_loss += loss.item()
+        n_physics_batches += 1
+
+    # Validation loop
+    if (epoch + 1) % validation_epochs == 0:
+        model.eval() 
+        total_val_loss, n_val_batches = 0.0, 0
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            for step, (input_nodes, output_nodes, blocks) in enumerate(islice(physics_val_loader, steps_per_epoch_physics)):
+                blocks = [b.to(device) for b in blocks]
+                
+                x = blocks[0].srcdata['feat']
+                x_norm = norm_feats(x, stim_center)
+                pred = model(blocks, x_norm)
+
+                loss = laplace_physics_loss_block(blocks[-1], potential_block)
+                total_val_loss += loss.item()
+                n_val_batches += 1
+
+        avg_val = total_val_loss / max(1, n_val_batches)
+        scheduler_physics_loss.step(avg_val)
+
+        if avg_val < best_val - 1e-9:
+            best_val = avg_val
+            logging.info(f"New best validation loss: {best_val:.8f} at epoch {epoch+1}")
+            save_ckpt(model, "physics_loss", True)
+
+    avg_physics = total_physics_loss / max(1, n_physics_batches)
+
+    if (epoch + 1) % ckpt_epochs == 0:
+        save_ckpt(model, "physics_loss", False)
+
+    val_loss_str = f"Val Loss: {avg_val:.8f} " if (epoch + 1) % validation_epochs == 0 else ""
+    msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
           f"Physics Loss: {avg_physics:.8f} "
           f"{val_loss_str}"
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
@@ -442,8 +489,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 
 # Save the model
 torch.save({
-    "model_state": model.state_dict(),
-    "stim_scale": stim_scale,
-}, "trained_gnn_NNConv_laplace_v1.pth")
+    "model_state": model.state_dict()
+}, "trained_gnn_NNConv_laplace_v2.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_v1.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_v2.pth")
