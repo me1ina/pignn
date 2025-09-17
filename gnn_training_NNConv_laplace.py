@@ -133,10 +133,7 @@ def norm_feats(feats, stim_center):
     x[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
     return x
 
-def laplace_residual_interior_block(B: dgl.DGLBlock,
-                                    pred_dst: torch.Tensor,
-                                    lam: float = 1,
-                                    use_abs: bool = True) -> torch.Tensor:
+def laplace_residual_interior_block(B, pred_dst, lam: float = 1, use_abs: bool = True):
     """
     Physics loss on the last block `B` without zero padding.
     - Uses only dst dst edges (u < Nd) so both endpoints have predictions.
