@@ -460,8 +460,7 @@ for epoch in tqdm(range(epochs_physics_loss), desc="Physics Loss Training"):
                 x = blocks[0].srcdata['feat']
                 x_norm = norm_feats(x, stim_center)
                 pred = model(blocks, x_norm)
-                potential_block = torch.zeros(blocks[-1].num_src_nodes(), 1, device=pred.device)
-                potential_block[blocks[-1].dstnodes()] = pred
+
                 loss = laplace_physics_loss_block(blocks[-1], potential_block)
                 total_val_loss += loss.item()
                 n_val_batches += 1
@@ -483,7 +482,7 @@ for epoch in tqdm(range(epochs_physics_loss), desc="Physics Loss Training"):
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
           f"Physics Loss: {avg_physics:.8f} "
           f"{val_loss_str}"
-          f"LR: {optimizer_physics_loss.param_groups[0]['lr']:.2e}")
+          f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
     
     print(msg)
     logging.info(msg)

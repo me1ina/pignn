@@ -70,14 +70,15 @@ def get_stim_center(g):
     return g.ndata['feat'][stim_nodes, :3].mean(0)  # xyz in mm
 
 def norm_feats(feats, stim_center):
-    feats[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max 
+    x = torch.empty_like(feats)
+    x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max
     #feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
     #feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
     #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
 
     # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
-    feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
-    return feats
+    x[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
+    return x
 
 #inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"

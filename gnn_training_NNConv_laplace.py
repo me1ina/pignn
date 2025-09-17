@@ -24,7 +24,7 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-epochs_warmup = 20
+epochs_warmup = 0
 warmup_lr = 1e-3
 warmup_patience = 2
 epochs_data_loss = 200
@@ -110,15 +110,14 @@ class EdgeAwareGNN(nn.Module):
         e3 = edge_feats(blocks[2])
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoints/"):
+def save_ckpt(model, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
         ckpt_name = f"checkpoint_best.pth"
     else:
         ckpt_name = f"checkpoint_epoch_last.pth"
     path = path + ckpt_name
     torch.save({
-    "model_state": model.state_dict(),
-    "stim_scale": stim_scale,
+    "model_state": model.state_dict()
     }, path)
     logging.info(f"Checkpoint saved to {path}")
 
@@ -129,45 +128,84 @@ def get_stim_center(g):
     return g.ndata['feat'][stim_nodes, :3].mean(0)  # xyz in mm
 
 def norm_feats(feats, stim_center):
-    feats[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max 
-    feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
-    return feats
+    x = torch.empty_like(feats)
+    x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max
+    x[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
+    return x
 
-def laplace_physics_loss_block(block, potential):
-  # Edge endpoints in *local IDs*
-    src, dst = block.edges()
+def laplace_residual_interior_block(B: dgl.DGLBlock,
+                                    pred_dst: torch.Tensor,
+                                    lam: float = 1,
+                                    use_abs: bool = True) -> torch.Tensor:
+    """
+    Physics loss on the last block `B` without zero padding.
+    - Uses only dst dst edges (u < Nd) so both endpoints have predictions.
+    - Reduces residual only on *interior* dst nodes (all in-neighbors inside dst).
+    pred_dst: (Nd,1) or (Nd,) predicted potential for B.dst nodes
+    returns: lam * mean(|residual|) over interior nodes (or mean(residual^2) if use_abs=False)
+    """
+    Nd = B.num_dst_nodes()
+    u, v = B.edges()                      # u: in [0, Ns), v: in [0, Nd)
+    is_dd = (u < Nd)                      # dst–dst edges mask
+    if not torch.any(is_dd):
+        return pred_dst.new_tensor(0.0)
 
-    coords = block.srcdata['feat'][:, 0:3]
-    sigma  = block.srcdata['feat'][:, 3:6]
-    I_stim   = block.edata['stim']
-    face_areas   = block.edata['face_area'].view(-1, 1) 
+    # Interior dst nodes: deg_all == deg_dd (and > 0)
+    deg_all = torch.bincount(v, minlength=Nd)
+    v_dd    = v[is_dd]
+    deg_dd  = torch.bincount(v_dd, minlength=Nd)
+    interior = (deg_all > 0) & (deg_all == deg_dd)
+    if not torch.any(interior):
+        return pred_dst.new_tensor(0.0)
 
-    # Map to local node features
-    pot_src, pot_dst = potential[src], potential[dst]
-    delta_V = pot_src - pot_dst
+    # Restrict to dst–dst edges
+    u_dd = u[is_dd]
+    v_dd = v_dd
 
-    delta_x = coords[src] - coords[dst]
-    dist = torch.norm(delta_x, dim=1, keepdim=True)
-    dist_sq = dist ** 2
+    # Predictions for dst nodes
+    phi = pred_dst.view(-1)               # (Nd,)
 
-    sigma_eff = sigma[src] * ((delta_x * 1e-3) ** 2)
-    sigma_eff = sigma_eff.sum(dim=1, keepdim=True) / (dist_sq * 1e-6 + 1e-12)
+    # --- Your original geometry/physics, but only on dst–dst edges ---
+    coords = B.srcdata['feat'][:, 0:3]    # (Ns,3) but u_dd/v_dd will use src idx for u and dst idx for v
+    sigma  = B.srcdata['feat'][:, 3:6]    # (Ns,3) conductivity components
+    I_stim = B.edata['stim'].view(-1, 1)  # (E,1)
+    I_stim_dd = I_stim[is_dd]             # (E_dd,1)
+    face_areas = B.edata['face_area'].view(-1, 1)[is_dd]  # (E_dd,1)
 
-    flux_density = sigma_eff * delta_V / (dist + 1e-12)
-    flux_current = flux_density * face_areas
+    pot_src = phi[u_dd].unsqueeze(-1)     # (E_dd,1)
+    pot_dst = phi[v_dd].unsqueeze(-1)     # (E_dd,1)
+    delta_V = pot_src - pot_dst           # (E_dd,1)
 
-    zero_flux = torch.zeros_like(potential)
-    inflow = zero_flux.index_add(0, dst, flux_current)
-    outflow = zero_flux.index_add(0, src, flux_current)
+    delta_x = coords[u_dd] - coords[v_dd] # (E_dd,3)   (units: mm)
+    dist    = torch.norm(delta_x, dim=1, keepdim=True)           # (E_dd,1) mm
+    dist_sq = dist * dist
 
-    stim_per_cell = torch.zeros_like(potential)
-    stim_per_cell = stim_per_cell.index_add(0, dst, 0.25 * I_stim)
-    stim_per_cell = stim_per_cell.index_add(0, src, 0.25 * I_stim)
+    # Effective conductivity along the edge direction (your formula, unit-safe)
+    # Convert mm -> m inside the dot terms to match σ [S/m]
+    sigma_eff = sigma[u_dd] * ((delta_x * 1e-3) ** 2)            # (E_dd,3)
+    sigma_eff = sigma_eff.sum(dim=1, keepdim=True) / (dist_sq * 1e-6 + 1e-12)  # (E_dd,1)
 
-    divergence = inflow - outflow
-    residual = divergence - stim_per_cell
+    flux_density = sigma_eff * delta_V / (dist + 1e-12)          # (E_dd,1)
+    flux_current = flux_density * face_areas                     # (E_dd,1)
 
-    return (residual.abs()).mean()
+    # Divergence on dst nodes (Nd×1), using only dst–dst edges
+    div = torch.zeros(Nd, 1, device=phi.device, dtype=flux_current.dtype)
+    # inflow to v_dd, outflow from u_dd
+    div.index_add_(0, v_dd,  flux_current)
+    div.index_add_(0, u_dd, -flux_current)
+
+    # Scatter the (scaled) stimulation current equally to both endpoints (your convention)
+    stim = torch.zeros(Nd, 1, device=phi.device, dtype=flux_current.dtype)
+    stim.index_add_(0, v_dd,  0.25 * I_stim_dd)
+    stim.index_add_(0, u_dd,  0.25 * I_stim_dd)
+
+    residual = div - stim                  # (Nd,1)
+
+    # Reduce only over interior dst nodes
+    r = residual[interior].view(-1)
+    loss = r.abs().mean() if use_abs else (r.pow(2).mean())
+    return lam * loss
+
 
 print("Start training process")
 print("Loading graph and initializing model...")
@@ -258,7 +296,11 @@ sampler = NeighborSampler(
     prefetch_node_feats=['feat', 'label', 'w_dist', 'w_pot'], 
     prefetch_edge_feats=['stim']
 )
-physics_sampler = MultiLayerFullNeighborSampler(3)
+physics_sampler = MultiLayerFullNeighborSampler(
+    [None, None, None],
+    prefetch_node_feats=['feat'],
+    prefetch_edge_feats=['stim', 'face_area']
+)
 
 train_loader = DataLoader(
     g, train_nids, sampler,
@@ -373,18 +415,14 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 
     total_physics_loss, n_physics_batches = 0.0, 0
     # PINN loop
-    for estep, (input_nodes, output_nodes, blocks) in enumerate(islice(physics_loader, steps_per_epoch_physics)):
+    for estep, (input_nodes, output_nodes, blocks) in enumerate(islice(physics_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
         x = blocks[0].srcdata['feat']
         x_norm = norm_feats(x, stim_center)
 
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model(blocks, x_norm)
-            # Build a tensor covering *all src nodes* in the last block
-            potential_block = torch.zeros(blocks[-1].num_src_nodes(), 1, device=pred.device)
-            # Assign the predictions into the right local positions
-            potential_block[blocks[-1].dstnodes()] = pred
-            loss = laplace_physics_loss_block(blocks[-1], potential_block)
+            loss = laplace_residual_interior_block(blocks[-1], pred)
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -422,18 +460,18 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         if avg_val < best_val - 1e-9:
             best_val = avg_val
             logging.info(f"New best validation loss: {best_val:.8f} at epoch {epoch+1}")
-            save_ckpt(model, stim_scale, True)
+            save_ckpt(model, True)
 
     avg_train = total_train_loss / max(1, n_train_batches)
     avg_physics = total_physics_loss / max(1, n_physics_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
-        save_ckpt(model, stim_scale, False)
+        save_ckpt(model, False)
 
-    val_loss_str = f"Val Loss: {avg_val:.8f} " if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = f"Val Loss: {avg_val:.10f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
-          f"Train Loss: {avg_train:.8f} "
-          f"Physics Loss: {avg_physics:.8f} "
+          f"Train Loss: {avg_train:.10f} "
+          f"Physics Loss: {avg_physics:.10f} "
           f"{val_loss_str}"
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}")
     
@@ -443,7 +481,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-    "stim_scale": stim_scale,
-}, "trained_gnn_NNConv_laplace_v1.pth")
+}, "trained_gnn_NNConv_laplace_v3.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_v1.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_v3.pth")
