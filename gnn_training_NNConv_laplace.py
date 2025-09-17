@@ -293,11 +293,7 @@ sampler = NeighborSampler(
     prefetch_node_feats=['feat', 'label', 'w_dist', 'w_pot'], 
     prefetch_edge_feats=['stim']
 )
-physics_sampler = MultiLayerFullNeighborSampler(
-    [None, None, None],
-    prefetch_node_feats=['feat'],
-    prefetch_edge_feats=['stim', 'face_area']
-)
+physics_sampler = MultiLayerFullNeighborSampler(3)
 
 train_loader = DataLoader(
     g, train_nids, sampler,
