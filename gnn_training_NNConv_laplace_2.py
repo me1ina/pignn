@@ -24,6 +24,7 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
+num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
 epochs_warmup = 0
 warmup_lr = 1e-3
 warmup_patience = 2
@@ -269,13 +270,10 @@ data_sampler = ClusterGCNSampler(
     prefetch_edata=['stim','face_area'],
 )
 
-# Number of clusters (name can differ across DGL versions)
-num_parts = getattr(data_sampler, "num_partitions", getattr(data_sampler, "num_clusters", None))
-assert num_parts is not None, "Could not read number of clusters from ClusterGCNSampler"
 
 # Split clusters (NOT nodes) into train/val
-part_ids = torch.randperm(num_parts)
-num_val_parts = max(1, int(0.05 * num_parts))  # 5% clusters for validation
+part_ids = torch.randperm(num_cluster_nodes)
+num_val_parts = max(1, int(0.05 * num_cluster_nodes))  # 5% clusters for validation
 val_parts   = part_ids[:num_val_parts]
 train_parts = part_ids[num_val_parts:]
 
