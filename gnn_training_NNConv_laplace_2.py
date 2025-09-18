@@ -289,13 +289,13 @@ warmup_val_loader = DataLoader(
 )
 data_train_loader = DataLoader(
     g, train_parts, data_sampler,
-    batch_size=batch_size, shuffle=True, drop_last=False,
+    batch_size=1, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 
 data_val_loader = DataLoader(
     g, val_parts, data_sampler,
-    batch_size=batch_size, shuffle=True, drop_last=False,
+    batch_size=1, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 
