@@ -109,7 +109,7 @@ class EdgeAwareGNN(nn.Module):
         return F.softplus(self.conv3(blocks[2], h, e3))
     
     def forward_full(self, g, x):
-        e = g.edata['stim'].unsqueeze(-1)
+        e = edge_feats(g)
         h = F.relu(self.norm1(self.conv1(g, x, e)))
         h = F.relu(self.norm2(self.conv2(g, h, e)))   # same g each layer
         out = self.conv3(g, h, e)
@@ -143,7 +143,7 @@ def laplace_physics_loss_graph(graph, potential):
     src, dst = graph.edges()
 
     coords = graph.ndata['feat'][:, 0:3]
-    sigma  = graph.srcdata['feat'][:, 3:6]
+    sigma  = graph.ndata['feat'][:, 3:6]
     I_stim   = graph.edata['stim'].view(-1, 1)
     face_areas   = graph.edata['face_area'].view(-1, 1)
 
@@ -254,8 +254,8 @@ stim_center = get_stim_center(g)
 all_nids = torch.arange(g.num_nodes())
 perm = torch.randperm(len(all_nids))
 split = int(0.05 * len(all_nids))     # 5% for val
-val_nids = all_nids[perm[:split]]
-train_nids = all_nids[perm[split:]]
+warmup_val_nids = all_nids[perm[:split]]
+warmup_train_nids = all_nids[perm[split:]]
 
 # Create two DataLoaders - one for training and one for validation
 warmup_sampler = NeighborSampler(
@@ -269,24 +269,34 @@ data_sampler = ClusterGCNSampler(
     prefetch_edata=['stim','face_area'],
 )
 
+# Number of clusters (name can differ across DGL versions)
+num_parts = getattr(data_sampler, "num_partitions", getattr(data_sampler, "num_clusters", None))
+assert num_parts is not None, "Could not read number of clusters from ClusterGCNSampler"
+
+# Split clusters (NOT nodes) into train/val
+part_ids = torch.randperm(num_parts)
+num_val_parts = max(1, int(0.05 * num_parts))  # 5% clusters for validation
+val_parts   = part_ids[:num_val_parts]
+train_parts = part_ids[num_val_parts:]
+
 warmup_train_loader = DataLoader(
-    g, train_nids, warmup_sampler,
+    g, warmup_train_nids, warmup_sampler,
     batch_size=batch_size, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 warmup_val_loader = DataLoader(
-    g, val_nids, warmup_sampler,
+    g, warmup_val_nids, warmup_sampler,
     batch_size=batch_size, shuffle=False, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 data_train_loader = DataLoader(
-    g, train_nids, data_sampler,
+    g, train_parts, data_sampler,
     batch_size=batch_size, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 
 data_val_loader = DataLoader(
-    g, val_nids, data_sampler,
+    g, val_parts, data_sampler,
     batch_size=batch_size, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
