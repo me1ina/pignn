@@ -265,8 +265,8 @@ warmup_sampler = NeighborSampler(
 )
 data_sampler = ClusterGCNSampler(
     g, k=1500,                 # number of clusters (tune)
-    prefetch_node_feats=['feat','label', 'w_dist', 'w_pot'],
-    prefetch_edge_feats=['stim','face_area'],
+    prefetch_ndata=['feat','label', 'w_dist', 'w_pot'],
+    prefetch_edata=['stim','face_area'],
 )
 
 warmup_train_loader = DataLoader(
