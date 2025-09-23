@@ -14,7 +14,7 @@ import logging
 coord_max = 35.0     # mm (x,y in [-33,33], z in [0,35])
 z_center = 17.5     # mm
 sigma_max = 2.0      # S/m
-stim_scale = 1.0 / (0.0066 * 2)   # maps ~0..0.0066 µA -> ~0..1 (or your final chosen value)
+stim_scale = 100
 
 def edge_feats(b):
     s = (b.edata['stim'] * stim_scale).unsqueeze(-1)
@@ -71,13 +71,13 @@ def get_stim_center(g):
 
 def norm_feats(feats, stim_center):
     x = torch.empty_like(feats)
-    x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max
+    x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device))
     #feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
     #feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
     #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
 
     # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
-    x[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
+    x[:, 3:6] = (feats[:, 3:6])
     return x
 
 #inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
