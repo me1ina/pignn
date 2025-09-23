@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace.log',
+    filename='training_laplace_only.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -25,7 +25,7 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 20
+epochs_warmup = 25
 warmup_lr = 1e-3
 warmup_patience = 2
 epochs_main = 500
@@ -35,8 +35,11 @@ ckpt_epochs = 5
 validation_epochs = 4
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
-stim_scale = 100
+stim_scale = 100 #/(0.0066 *2) # map µA to ~[0,1]
 alpha_for_weights = 2
+coord_max = 35.0 #mm
+z_center = 17.5 #mm
+sigma_max = 2.0 # S/m
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats                 : {in_feats}")
@@ -114,7 +117,7 @@ class EdgeAwareGNN(nn.Module):
         out = self.conv3(g, h, e)
         return F.softplus(out)
 
-def save_ckpt(model, best_val: bool = False, path: str = "checkpoints_l5/"):
+def save_ckpt(model, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
         ckpt_name = f"checkpoint_best.pth"
     else:
@@ -136,44 +139,6 @@ def norm_feats(feats, stim_center):
     x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device))
     x[:, 3:6] = (feats[:, 3:6])
     return x
-
-def prep_graph(g):
-    #add distance-to-stim weight
-    stim_mask = (g.edata['stim'] != 0)
-    if stim_mask.ndim > 1:
-        stim_mask = stim_mask.squeeze(-1)
-    eids = g.edges(form='eid')[stim_mask]
-    stim_src, stim_dst = g.find_edges(eids)
-    stim_nodes = torch.unique(torch.cat([stim_src, stim_dst]))
-    _, khop_nodes = dgl.khop_in_subgraph(g, stim_nodes, k=3)
-    w_dist = torch.zeros(g.num_nodes(), dtype=torch.float32)
-    w_dist[khop_nodes] = 1.0
-    g.ndata['w_dist'] = w_dist
-    g.ndata['w_pot'] = 1 + alpha_for_weights * (g.ndata['label'] / g.ndata['label'].max())
-    g.ndata['feat_norm'] = norm_feats(g.ndata['feat'][:, :in_feats], get_stim_center(g))
-
-def log_graph_stats(g):
-    logging.info(f"Graph stats:")
-    logging.info(f"  # nodes: {g.num_nodes()}")
-    logging.info(f"  # edges: {g.num_edges()}")
-    degs = g.in_degrees().float()
-    logging.info(f"  Average degree: {degs.mean().item():.2f}")
-    logging.info(f"  Max degree: {degs.max().item():.2f}")
-    logging.info(f"  Min degree: {degs.min().item():.2f}")
-
-    for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
-        min_val = float(g.ndata['feat'][:,i].amin())
-        max_val = float(g.ndata['feat'][:,i].amax())
-        logging.info(f"{name} range: min {min_val}, max {max_val}")
-
-    logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
-                f"max {float(g.edata['stim'].amax())}")
-
-    logging.info(f"I stim range scaled: min {float(g.edata['stim'].amin()) * stim_scale}, "
-                f"max {float(g.edata['stim'].amax()) * stim_scale}")
-
-    logging.info(f"Potential range: min {float(g.ndata['label'].amin())}, "
-                f"max {float(g.ndata['label'].amax())}")
 
 def laplace_physics_loss_graph(graph, potential):
   # Edge endpoints in *local IDs*
@@ -237,23 +202,58 @@ logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus}\n"
              f"AMP dtype={'bf16' if use_bf16 else 'fp16' if use_cuda else 'cpu'}\n"
              f"TF32={'on' if is_ampere_plus else 'off'}\n")
 
-graph_paths = ["graph_area_vol_VagusA1924_HC0_AS1.1.dgl", "graph_area_Pudendal_AIR_2_AS1.6.dgl", "graph_area_Sacral_Cuff_2_AS1.5.dgl"]
-graphs = []
-for path in graph_paths:
-    loaded_graphs, _ = dgl.load_graphs(path)
-    g = loaded_graphs[0]
-    prep_graph(g)
-    log_graph_stats(g)
-    graphs.append(g)
-
-G = dgl.disjoint_union(graphs) 
+loaded_graphs, _ = dgl.load_graphs("graph_area_vol_VagusA1924_HC0_AS1.1.dgl")
+g = loaded_graphs[0]
+#g = dgl.to_bidirected(g, copy_ndata=True)
 
 #create checkpoint directory
-os.makedirs("checkpoints_l5", exist_ok=True)
-logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints_l5')}")
+os.makedirs("checkpoints", exist_ok=True)
+logging.info(f"Checkpoints are saved in {os.path.abspath('checkpoints')}")
+
+g.ndata['feat'] = g.ndata['feat'][:, 0:6].to(torch.float32) # 7th feature would be volume which is not needed yet
+
+for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
+    min_val = float(g.ndata['feat'][:,i].amin())
+    max_val = float(g.ndata['feat'][:,i].amax())
+    logging.info(f"{name} range: min {min_val}, max {max_val}")
+    if i < 2:
+        min_val = min_val/coord_max
+        max_val = max_val/coord_max
+    elif i == 2:
+        min_val = (min_val - z_center)/z_center
+        max_val = (max_val - z_center)/z_center
+    else:
+        min_val = min_val/sigma_max
+        max_val = max_val/sigma_max
+    logging.info(f"{name} scaled range: min {min_val}, max {max_val}")
+
+logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
+             f"max {float(g.edata['stim'].amax())}")
+
+logging.info(f"I stim range scaled: min {float(g.edata['stim'].amin()) * stim_scale}, "
+             f"max {float(g.edata['stim'].amax()) * stim_scale}")
+
+logging.info(f"Potential range: min {float(g.ndata['label'].amin())}, "
+             f"max {float(g.ndata['label'].amax())}")
+
+#add distance-to-stim weight
+stim_mask = (g.edata['stim'] != 0)
+if stim_mask.ndim > 1:
+    stim_mask = stim_mask.squeeze(-1)
+eids = g.edges(form='eid')[stim_mask]
+stim_src, stim_dst = g.find_edges(eids)
+stim_nodes = torch.unique(torch.cat([stim_src, stim_dst]))
+_, khop_nodes = dgl.khop_in_subgraph(g, stim_nodes, k=3)
+w_dist = torch.zeros(g.num_nodes(), dtype=torch.float32)
+w_dist[khop_nodes] = 1.0
+g.ndata['w_dist'] = w_dist
+
+g.ndata['w_pot'] = 1 + alpha_for_weights * (g.ndata['label'] / g.ndata['label'].max())
+
+stim_center = get_stim_center(g)
 
 # Split node IDs into train / validation 
-all_nids = torch.arange(G.num_nodes())
+all_nids = torch.arange(g.num_nodes())
 perm = torch.randperm(len(all_nids))
 split = int(0.05 * len(all_nids))     # 5% for val
 warmup_val_nids = all_nids[perm[:split]]
@@ -262,12 +262,12 @@ warmup_train_nids = all_nids[perm[split:]]
 # Create two DataLoaders - one for training and one for validation
 warmup_sampler = NeighborSampler(
     fanouts, 
-    prefetch_node_feats=['feat_norm', 'label'], 
+    prefetch_node_feats=['feat', 'label'], 
     prefetch_edge_feats=['stim']
 )
 data_sampler = ClusterGCNSampler(
-    G, k=num_cluster_nodes,                 # number of clusters (tune)
-    prefetch_ndata=['feat_norm','label', 'w_dist', 'w_pot'],
+    g, k=1500,                 # number of clusters (tune)
+    prefetch_ndata=['feat','label', 'w_dist', 'w_pot'],
     prefetch_edata=['stim','face_area'],
 )
 
@@ -279,23 +279,23 @@ val_parts   = part_ids[:num_val_parts]
 train_parts = part_ids[num_val_parts:]
 
 warmup_train_loader = DataLoader(
-    G, warmup_train_nids, warmup_sampler,
+    g, warmup_train_nids, warmup_sampler,
     batch_size=batch_size, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 warmup_val_loader = DataLoader(
-    G, warmup_val_nids, warmup_sampler,
+    g, warmup_val_nids, warmup_sampler,
     batch_size=batch_size, shuffle=False, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 data_train_loader = DataLoader(
-    G, train_parts, data_sampler,
+    g, train_parts, data_sampler,
     batch_size=1, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 
 data_val_loader = DataLoader(
-    G, val_parts, data_sampler,
+    g, val_parts, data_sampler,
     batch_size=1, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
@@ -316,10 +316,11 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
     # Warmup Training loop
     for step, (input_nodes, output_nodes, blocks) in enumerate(islice(warmup_train_loader, steps_per_epoch)):
         blocks = [b.to(device) for b in blocks]
-        x = blocks[0].srcdata['feat_norm']
+        x = blocks[0].srcdata['feat']
         y = blocks[-1].dstdata['label']
         
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            x = norm_feats(x, stim_center)
             pred = model(blocks, x)
             loss = loss_fn_warmup(pred, y)
 
@@ -341,8 +342,9 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             for steps, (input_nodes, output_nodes, blocks) in enumerate(islice(warmup_val_loader, steps_per_epoch)):
                 blocks = [b.to(device) for b in blocks]
-                x = blocks[0].srcdata['feat_norm']
+                x = blocks[0].srcdata['feat']
                 y = blocks[-1].dstdata['label']
+                x = norm_feats(x, stim_center)
                 pred = model(blocks, x)
                 loss = loss_fn_warmup(pred, y)
                 total_val_loss += loss.item()
@@ -372,16 +374,14 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
     for step, batch in enumerate(islice(data_train_loader, steps_per_epoch)):
         batch = batch.to(device)
         
-        x = batch.ndata['feat_norm']
+        x = batch.ndata['feat']
         y = batch.ndata['label']
-        w = batch.ndata['w_pot'].unsqueeze(-1).to(x.dtype)
-        w = w * (1.0 + batch.ndata['w_dist'].unsqueeze(-1).to(x.dtype))
 
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
+            x = norm_feats(x, stim_center)
             pred = model.forward_full(batch, x)
-            data_loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
             phys_loss = laplace_physics_loss_graph(batch, pred)
-            loss = data_loss + 10 * phys_loss
+            loss = 100 * phys_loss
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -392,34 +392,29 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
             loss.backward()
             optimizer_data_loss.step()
         total_train_loss += loss.item()
-        total_data_loss += data_loss.item()
         total_phys_loss += phys_loss.item()
         n_train_batches += 1
 
     # Validation loop
     if (epoch + 1) % validation_epochs == 0:
         model.eval() 
-        total_val_loss, total_data_val_loss, total_phys_val_loss,n_val_batches = 0.0, 0.0, 0.0, 0
+        total_val_loss, total_phys_val_loss, n_val_batches = 0.0, 0.0, 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             for step, batch in enumerate(islice(data_val_loader, steps_per_epoch)):
                 batch = batch.to(device)
 
-                x = batch.ndata['feat_norm']
+                x = batch.ndata['feat']
                 y = batch.ndata['label']
-                w = batch.ndata['w_pot'].unsqueeze(-1).to(x.dtype)
-                w = w * (1.0 + batch.ndata['w_dist'].unsqueeze(-1).to(x.dtype))
+                x = norm_feats(x, stim_center)
                 pred = model.forward_full(batch, x)
 
-                data_loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
                 phys_loss = laplace_physics_loss_graph(batch, pred)
-                loss = data_loss + 10 * phys_loss
+                loss = 100 * phys_loss
                 total_val_loss += loss.item()
-                total_data_val_loss += data_loss.item()
                 total_phys_val_loss += phys_loss.item()
                 n_val_batches += 1
 
         avg_total_val = total_val_loss / max(1, n_val_batches)
-        avg_data_val  = total_data_val_loss / max(1, n_val_batches)
         avg_phys_val  = total_phys_val_loss / max(1, n_val_batches)
         scheduler_data_loss.step(avg_total_val)
 
@@ -429,16 +424,14 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
             save_ckpt(model, True)
 
     avg_total_train = total_train_loss / max(1, n_train_batches)
-    avg_total_data = total_data_loss / max(1, n_train_batches)
     avg_total_physics = total_phys_loss / max(1, n_train_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
         save_ckpt(model, False)
 
-    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Data Val Loss: {avg_data_val:.10f} Physics Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Physics Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_main} "
           f"Train Loss: {avg_total_train:.10f} "
-          f"Data Loss: {avg_total_data:.10f} "
           f"Physics Loss: {avg_total_physics:.10f} "
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}"
           f"{val_loss_str}")
@@ -449,6 +442,6 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_v5.pth")
+}, "trained_gnn_NNConv_laplace_v4.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_v5.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_v4.pth")
