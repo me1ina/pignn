@@ -442,6 +442,6 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_v4.pth")
+}, "trained_gnn_NNConv_laplace_only.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_v4.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_only.pth")
