@@ -28,7 +28,7 @@ num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
 epochs_warmup = 0
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 5
+epochs_main = 2
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -216,22 +216,9 @@ for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
     min_val = float(g.ndata['feat'][:,i].amin())
     max_val = float(g.ndata['feat'][:,i].amax())
     logging.info(f"{name} range: min {min_val}, max {max_val}")
-    if i < 2:
-        min_val = min_val/coord_max
-        max_val = max_val/coord_max
-    elif i == 2:
-        min_val = (min_val - z_center)/z_center
-        max_val = (max_val - z_center)/z_center
-    else:
-        min_val = min_val/sigma_max
-        max_val = max_val/sigma_max
-    logging.info(f"{name} scaled range: min {min_val}, max {max_val}")
 
 logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
              f"max {float(g.edata['stim'].amax())}")
-
-logging.info(f"I stim range scaled: min {float(g.edata['stim'].amin()) * stim_scale}, "
-             f"max {float(g.edata['stim'].amax()) * stim_scale}")
 
 logging.info(f"Potential range: min {float(g.ndata['label'].amin())}, "
              f"max {float(g.ndata['label'].amax())}")
