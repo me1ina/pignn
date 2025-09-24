@@ -25,10 +25,10 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 25
+epochs_warmup = 0
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 500
+epochs_main = 5
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -369,7 +369,7 @@ best_val = float("inf")
 
 for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
     model.train()
-    total_train_loss, total_data_loss, total_phys_loss, n_train_batches = 0.0, 0.0, 0.0, 0
+    total_train_loss, total_phys_loss, n_train_batches = 0.0, 0.0, 0
     # Training loop
     for step, batch in enumerate(islice(data_train_loader, steps_per_epoch)):
         batch = batch.to(device)
@@ -398,7 +398,7 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
     # Validation loop
     if (epoch + 1) % validation_epochs == 0:
         model.eval() 
-        total_val_loss, total_phys_val_loss, n_val_batches = 0.0, 0.0, 0.0, 0
+        total_val_loss, total_phys_val_loss, n_val_batches = 0.0, 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             for step, batch in enumerate(islice(data_val_loader, steps_per_epoch)):
                 batch = batch.to(device)

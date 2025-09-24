@@ -25,10 +25,10 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 20
+epochs_warmup = 0
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 500
+epochs_main = 5
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -246,7 +246,7 @@ for path in graph_paths:
     log_graph_stats(g)
     graphs.append(g)
 
-G = dgl.disjoint_union(graphs) 
+G = dgl.batch(graphs) 
 
 #create checkpoint directory
 os.makedirs("checkpoints_l5", exist_ok=True)
