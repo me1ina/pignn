@@ -25,10 +25,10 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 0
+epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 2
+epochs_main = 200
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -368,7 +368,7 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
             x = norm_feats(x, stim_center)
             pred = model.forward_full(batch, x)
             phys_loss = laplace_physics_loss_graph(batch, pred)
-            loss = 100 * phys_loss
+            loss = 1e3 * phys_loss
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
