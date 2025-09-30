@@ -90,8 +90,8 @@ def norm_feats(feats, stim_center):
 #inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HT60_AS1.1.dgl"
-#inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
-inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
+inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
+#inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_Sacral_Interstim_AS3.3.dgl"
 #inference_graph_name = "graph_area_Sacral_Cuff_2_AS1.5.dgl"
 #inference_graph_name = "graph_area_Pudendal_Cuff_1_AS1.10.dgl"
@@ -144,8 +144,8 @@ g.ndata['feat'] = g.ndata['feat'][:, 0:in_feats] # 7th feature would be volume w
 nids = torch.arange(g.num_nodes(), dtype=torch.int64)
 sampler = MultiLayerFullNeighborSampler(3)
 
-logging.info("graph device:", g.device)
-logging.info("nids device :", nids.device)
+print("graph device:", g.device)
+print("nids device :", nids.device)
 
 loader = DataLoader(
     g, nids, sampler,
@@ -175,6 +175,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HC0_AS1.dgl", [g])
-logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HC0_AS1.dgl")
+dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HC0_AS7.dgl", [g])
+logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HC0_AS7.dgl")
 
