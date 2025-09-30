@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import dgl
 from dgl.nn import NNConv
-from dgl.dataloading import MultiLayerFullNeighborSampler, DataLoader
+from dgl.dataloading import NeighborSampler, DataLoader
 import pyvista as pv
 from pyvista import CellType
 import numpy as np
@@ -62,13 +62,6 @@ class EdgeAwareGNN(nn.Module):
         e3 = edge_feats(blocks[2])  # shape [E2,2]
         return F.softplus(self.conv3(blocks[2], h, e3))
     
-    def forward_full(self, g, x):
-        e = edge_feats(g)
-        h = F.relu(self.norm1(self.conv1(g, x, e)))
-        h = F.relu(self.norm2(self.conv2(g, h, e)))   # same g each layer
-        out = self.conv3(g, h, e)
-        return F.softplus(out)
-    
 
 def get_stim_center(g):
     eids = (g.edata['stim'] != 0).nonzero(as_tuple=False).reshape(-1)
@@ -87,11 +80,11 @@ def norm_feats(feats, stim_center):
     x[:, 3:6] = (feats[:, 3:6])
     return x
 
-inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
+#inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HT60_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
-#inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
+inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_Sacral_Interstim_AS3.3.dgl"
 #inference_graph_name = "graph_area_Sacral_Cuff_2_AS1.5.dgl"
 #inference_graph_name = "graph_area_Pudendal_Cuff_1_AS1.10.dgl"
@@ -142,7 +135,11 @@ model.load_state_dict(ckpt["model_state"])
 g.ndata['feat'] = g.ndata['feat'][:, 0:in_feats] # 7th feature would be volume which is not needed yet
 
 nids = torch.arange(g.num_nodes(), dtype=torch.int64)
-sampler = MultiLayerFullNeighborSampler(3)
+sampler = NeighborSampler(
+    list(fanouts),
+    prefetch_node_feats=['feat'],
+    prefetch_edge_feats=['stim']
+)
 
 print("graph device:", g.device)
 print("nids device :", nids.device)
@@ -168,13 +165,13 @@ with torch.no_grad():
         x_b = norm_feats(blocks[0].srcdata['feat'][:, :in_feats], stim_center)
         with autocast_ctx:
             y_b = model(blocks, x_b)  # [N_dst, 1]
-            preds[output_nodes] = y_b.detach().float().cpu()
+        preds[output_nodes] = y_b.detach().float().cpu()
 
 g.ndata["Electric_potential"] = preds.squeeze(1)
 
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_laplace_only_VagusA6050_HC0_AS1.dgl", [g])
-logging.info("Graph saved to inference_gnn_laplace_only_VagusA6050_HC0_AS1.dgl")
+dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HC0_AS1_1.dgl", [g])
+logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HC0_AS1_1.dgl")
 
