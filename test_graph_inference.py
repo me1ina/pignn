@@ -88,8 +88,8 @@ def norm_feats(feats, stim_center):
     return x
 
 #inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
-#inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
-inference_graph_name = "graph_area_VagusA1924_HT60_AS1.1.dgl"
+inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
+#inference_graph_name = "graph_area_VagusA1924_HT60_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
 #inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_Sacral_Interstim_AS3.3.dgl"
@@ -175,6 +175,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HT60_AS1.dgl", [g])
-logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HT60_AS1.dgl")
+dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HC240_AS2.dgl", [g])
+logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HC240_AS2.dgl")
 
