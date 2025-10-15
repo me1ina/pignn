@@ -397,9 +397,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             x = norm_feats(x, stim_center)
             pred = model.forward_full(batch, x)
             phys_loss = laplace_physics_loss_graph(batch, pred)
-            dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+            #dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = phys_loss + 10 * dirichlet_outer + 100 * dirichlet_inner
+            loss = phys_loss + 100 * dirichlet_inner
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -427,9 +427,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
                 pred = model.forward_full(batch, x)
 
                 phys_loss = laplace_physics_loss_graph(batch, pred)
-                dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+                #dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
                 dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-                loss = phys_loss + 10 * dirichlet_outer + 100 * dirichlet_inner
+                loss = phys_loss + 100 * dirichlet_inner
                 total_val_loss += loss.item()
                 total_phys_val_loss += phys_loss.item()
                 n_val_batches += 1
