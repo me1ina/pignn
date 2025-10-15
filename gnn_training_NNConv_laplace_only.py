@@ -195,7 +195,7 @@ def dirichlet_inner_bc_loss(graph, potential, ground_truth_potential):
                       ground_truth_potential[stim_nodes])
 
 def dirichlet_outer_bc_loss(graph, pred, stim_center):
-    x = norm_feats(graph.ndata['feat'], stim_center)
+    x = torch.norm(graph.ndata['feat'][:, :3] - stim_center, dim=1)
     R = torch.quantile(x, 0.85).item()
     outer_mask_local  = (x >= R)
     dirichlet_target = 0.0
