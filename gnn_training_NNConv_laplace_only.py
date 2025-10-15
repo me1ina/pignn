@@ -115,7 +115,7 @@ class EdgeAwareGNN(nn.Module):
         h = F.relu(self.norm1(self.conv1(g, x, e)))
         h = F.relu(self.norm2(self.conv2(g, h, e)))   # same g each layer
         out = self.conv3(g, h, e)
-        return F.softplus(out)
+        return out
 
 def save_ckpt(model, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
