@@ -144,37 +144,64 @@ def laplace_physics_loss_graph(graph, potential):
   # Edge endpoints in *local IDs*
     src, dst = graph.edges()
 
-    coords = graph.ndata['feat'][:, 0:3]
-    sigma  = graph.ndata['feat'][:, 3:6]
-    I_stim   = graph.edata['stim'].view(-1, 1)
-    face_areas   = graph.edata['face_area'].view(-1, 1)
+    coords = graph.ndata['feat'][:, 0:3] # mm
+    sigma  = graph.ndata['feat'][:, 3:6] # S/m
+    I_stim   = graph.edata['stim'].view(-1, 1) #mikroA = 1e-6 A
+    face_areas   = graph.edata['face_area'].view(-1, 1) # mm^2
 
     # Map to local node features
-    pot_src, pot_dst = potential[src], potential[dst]
-    delta_V = pot_src - pot_dst
+    pot_src, pot_dst = potential[src], potential[dst] # mV
+    delta_V = pot_src - pot_dst # mV
 
-    delta_x = coords[src] - coords[dst]
-    dist = torch.norm(delta_x, dim=1, keepdim=True)
-    dist_sq = dist ** 2
+    delta_x = coords[src] - coords[dst] # mm
+    dist = torch.norm(delta_x, dim=1, keepdim=True) # mm
+    #dist_sq = dist ** 2
 
-    sigma_eff = sigma[src] * ((delta_x * 1e-3) ** 2)
-    sigma_eff = sigma_eff.sum(dim=1, keepdim=True) / (dist_sq * 1e-6 + 1e-12)
+    #sigma_eff = sigma[src] * ((delta_x * 1e-3) ** 2)
+    #sigma_eff = sigma_eff.sum(dim=1, keepdim=True) / (dist_sq * 1e-6 + 1e-12)
+    # For anisotropic diagonal tensor [σ_xx, σ_yy, σ_zz]
+    direction = delta_x / (dist + 1e-12)  # unit direction
+    sigma_eff_src = (sigma[src] * direction**2).sum(dim=1, keepdim=True) # S/m
+    sigma_eff_dst = (sigma[dst] * direction**2).sum(dim=1, keepdim=True) # S/m
 
-    flux_density = sigma_eff * delta_V / (dist + 1e-12)
-    flux_current = flux_density * face_areas
+    # Harmonic mean (standard in FVM)
+    sigma_eff = 2 * sigma_eff_src * sigma_eff_dst / (sigma_eff_src + sigma_eff_dst + 1e-12) # S/m
+
+    flux_density = sigma_eff * delta_V / (dist + 1e-12) # (mV/mm)*(S/m) = (1e-3 V / 1e-3 m)*S/m = A/m^2
+    flux_current = flux_density * face_areas # mikroA
 
     zero_flux = torch.zeros_like(potential)
-    inflow = zero_flux.index_add(0, dst, flux_current)
-    outflow = zero_flux.index_add(0, src, flux_current)
+    inflow = zero_flux.index_add(0, dst, flux_current) # mikroA
+    outflow = zero_flux.index_add(0, src, flux_current) # mikroA
 
     stim_per_cell = torch.zeros_like(potential)
-    stim_per_cell = stim_per_cell.index_add(0, dst, 0.25 * I_stim)
-    stim_per_cell = stim_per_cell.index_add(0, src, 0.25 * I_stim)
+    stim_per_cell = stim_per_cell.index_add(0, dst, 0.25 * I_stim) # mikroA (0.25 because of 2 edges between src and dst)
+    stim_per_cell = stim_per_cell.index_add(0, src, 0.25 * I_stim) # mikroA
 
-    divergence = inflow - outflow
-    residual = divergence - stim_per_cell
+    divergence = inflow - outflow # mikroA
+    residual = divergence - stim_per_cell # mikroA
 
     return (residual.abs()).mean()
+
+def dirichlet_inner_bc_loss(graph, potential, ground_truth_potential):
+    # Find electrode nodes
+    stim_mask = (graph.edata['stim'] != 0).squeeze()
+    eids = graph.edges(form='eid')[stim_mask]
+    stim_src, stim_dst = graph.find_edges(eids)
+    stim_nodes = torch.unique(torch.cat([stim_src, stim_dst]))
+    
+    # Enforce ground truth potential at electrode
+    return F.mse_loss(potential[stim_nodes], 
+                      ground_truth_potential[stim_nodes])
+
+def dirichlet_outer_bc_loss(graph, pred, stim_center):
+    x = norm_feats(graph.ndata['feat'], stim_center)
+    R = torch.quantile(x, 0.85).item()
+    outer_mask_local  = (x >= R)
+    dirichlet_target = 0.0
+    dirichlet = (pred[outer_mask_local] - dirichlet_target).pow(2).mean()
+    return dirichlet
+
 
 print("Start training process")
 print("Loading graph and initializing model...")
@@ -370,7 +397,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             x = norm_feats(x, stim_center)
             pred = model.forward_full(batch, x)
             phys_loss = laplace_physics_loss_graph(batch, pred)
-            loss = 1e3 * phys_loss
+            dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+            dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
+            loss = phys_loss + 10 * dirichlet_outer + 100 * dirichlet_inner
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -398,7 +427,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
                 pred = model.forward_full(batch, x)
 
                 phys_loss = laplace_physics_loss_graph(batch, pred)
-                loss = 100 * phys_loss
+                dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+                dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
+                loss = phys_loss + 10 * dirichlet_outer + 100 * dirichlet_inner
                 total_val_loss += loss.item()
                 total_phys_val_loss += phys_loss.item()
                 n_val_batches += 1
@@ -423,7 +454,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
     val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Physics Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_main} "
           f"Train Loss: {avg_total_train:.10f} "
-          f"Physics Loss: {avg_total_physics:.10f} "
+          f"Laplace Loss: {avg_total_physics:.10f} "
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}"
           f"{val_loss_str}")
     
