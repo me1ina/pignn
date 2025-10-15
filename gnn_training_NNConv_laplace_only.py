@@ -25,10 +25,10 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 20
+epochs_warmup = 5
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 200
+epochs_main = 5
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -351,14 +351,16 @@ for epoch in tqdm(range(epochs_warmup), desc="Warmup"):
     print(msg)
     logging.info(msg)
 
-print("Warmup training done, starting data loss training...")
+print("Warmup training done, starting physics loss training...")
 best_val = float("inf")
 
-for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
+for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
     model.train()
     total_train_loss, total_phys_loss, n_train_batches = 0.0, 0.0, 0
     # Training loop
-    for step, batch in enumerate(islice(data_train_loader, steps_per_epoch)):
+    for step, batch in enumerate(data_train_loader):
+        if not (batch.edata['stim'] != 0).any():
+            continue  # skip if no stimulation in the batch
         batch = batch.to(device)
         
         x = batch.ndata['feat']
@@ -415,6 +417,8 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 
     if (epoch + 1) % ckpt_epochs == 0:
         save_ckpt(model, False)
+
+    print(f"At epoch {epoch+1}, {n_train_batches} training batches with stim processed.")
 
     val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Physics Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_main} "
