@@ -28,7 +28,7 @@ num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
 epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 200
+epochs_main = 1000
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -170,13 +170,15 @@ def laplace_physics_loss_graph(graph, potential):
     flux_density = sigma_eff * delta_V / (dist + 1e-12) # (mV/mm)*(S/m) = (1e-3 V / 1e-3 m)*S/m = A/m^2
     flux_current = flux_density * face_areas # mikroA
 
+    flux_current = flux_current / 2.0
+
     zero_flux = torch.zeros_like(potential)
     inflow = zero_flux.index_add(0, dst, flux_current) # mikroA
     outflow = zero_flux.index_add(0, src, flux_current) # mikroA
 
     stim_per_cell = torch.zeros_like(potential)
-    stim_per_cell = stim_per_cell.index_add(0, dst, 0.25 * I_stim) # mikroA (0.25 because of 2 edges between src and dst)
-    stim_per_cell = stim_per_cell.index_add(0, src, 0.25 * I_stim) # mikroA
+    stim_per_cell = stim_per_cell.index_add(0, dst, 0.5 * I_stim) # mikroA (0.25 because of 2 edges between src and dst)
+    stim_per_cell = stim_per_cell.index_add(0, src, 0.5 * I_stim) # mikroA
 
     divergence = inflow - outflow # mikroA
     residual = divergence - stim_per_cell # mikroA
