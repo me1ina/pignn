@@ -172,6 +172,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HC0_AS1_2.dgl", [g])
-logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HC0_AS1_2.dgl")
+dgl.save_graphs("inference_gnn_laplace_only_VagusA1924_HC0_AS1.dgl", [g])
+logging.info("Graph saved to inference_gnn_laplace_only_VagusA1924_HC0_AS1.dgl")
 

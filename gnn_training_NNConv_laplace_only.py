@@ -25,10 +25,10 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 5
+epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 50
+epochs_main = 200
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -71,7 +71,7 @@ def edge_feats(b):
 class EdgeAwareGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, edge_feat_dim, aggregator='mean'):
         super().__init__()
-        # Layer 1: in_feats → hidden_feats
+        # Layer 1: in_feats -> hidden_feats
         self.edge_mlp1 = nn.Sequential(
             nn.Linear(edge_feat_dim, in_feats * hidden_feats),
             nn.ReLU(),
@@ -79,7 +79,7 @@ class EdgeAwareGNN(nn.Module):
         )
         self.conv1 = NNConv(in_feats, hidden_feats, self.edge_mlp1, aggregator_type=aggregator)
         self.norm1 = nn.LayerNorm(hidden_feats)
-        # Layer 2: hidden_feats → hidden_feats
+        # Layer 2: hidden_feats -> hidden_feats
         self.edge_mlp2 = nn.Sequential(
             nn.Linear(edge_feat_dim, hidden_feats * hidden_feats),
             nn.ReLU(),
@@ -87,7 +87,7 @@ class EdgeAwareGNN(nn.Module):
         )
         self.conv2 = NNConv(hidden_feats, hidden_feats, self.edge_mlp2, aggregator_type=aggregator)
         self.norm2 = nn.LayerNorm(hidden_feats)
-        # Layer 3: hidden_feats → out_feats
+        # Layer 3: hidden_feats -> out_feats
         self.edge_mlp3 = nn.Sequential(
             nn.Linear(edge_feat_dim, hidden_feats * out_feats),
             nn.ReLU(),
@@ -195,6 +195,7 @@ def dirichlet_inner_bc_loss(graph, potential, ground_truth_potential):
                       ground_truth_potential[stim_nodes])
 
 def dirichlet_outer_bc_loss(graph, pred, stim_center):
+    stim_center = stim_center.to(graph.ndata['feat'].device)
     x = torch.norm(graph.ndata['feat'][:, :3] - stim_center, dim=1)
     R = torch.quantile(x, 0.85).item()
     outer_mask_local  = (x >= R)
@@ -383,7 +384,7 @@ best_val = float("inf")
 
 for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
     model.train()
-    total_train_loss, total_phys_loss, n_train_batches = 0.0, 0.0, 0
+    total_train_loss, total_laplace_loss, total_dirichlet_inner_loss, total_dirichlet_outer_loss, n_train_batches = 0.0, 0.0, 0.0, 0.0, 0
     # Training loop
     for step, batch in enumerate(data_train_loader):
         if not (batch.edata['stim'] != 0).any():
@@ -397,9 +398,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             x = norm_feats(x, stim_center)
             pred = model.forward_full(batch, x)
             phys_loss = laplace_physics_loss_graph(batch, pred)
-            #dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+            dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = phys_loss + 100 * dirichlet_inner
+            loss = phys_loss + 100 * dirichlet_inner + 10 * dirichlet_outer
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -410,7 +411,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             loss.backward()
             optimizer_data_loss.step()
         total_train_loss += loss.item()
-        total_phys_loss += phys_loss.item()
+        total_laplace_loss += phys_loss.item()
+        total_dirichlet_inner_loss += dirichlet_inner.item()
+        total_dirichlet_outer_loss += dirichlet_outer.item()
         n_train_batches += 1
 
     # Validation loop
@@ -427,9 +430,9 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
                 pred = model.forward_full(batch, x)
 
                 phys_loss = laplace_physics_loss_graph(batch, pred)
-                #dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+                dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
                 dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-                loss = phys_loss + 100 * dirichlet_inner
+                loss = phys_loss + 100 * dirichlet_inner + 10 * dirichlet_outer
                 total_val_loss += loss.item()
                 total_phys_val_loss += phys_loss.item()
                 n_val_batches += 1
@@ -444,17 +447,21 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             save_ckpt(model, True)
 
     avg_total_train = total_train_loss / max(1, n_train_batches)
-    avg_total_physics = total_phys_loss / max(1, n_train_batches)
+    avg_total_laplace = total_laplace_loss / max(1, n_train_batches)
+    avg_total_dirichlet_inner = total_dirichlet_inner_loss / max(1, n_train_batches)
+    avg_total_dirichlet_outer = total_dirichlet_outer_loss / max(1, n_train_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
         save_ckpt(model, False)
 
     print(f"At epoch {epoch+1}, {n_train_batches} training batches with stim processed.")
 
-    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Physics Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Laplace Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_main} "
           f"Train Loss: {avg_total_train:.10f} "
-          f"Laplace Loss: {avg_total_physics:.10f} "
+          f"Laplace Loss: {avg_total_laplace:.10f} "
+          f"Dirichlet Inner Loss: {avg_total_dirichlet_inner:.10f} "
+          f"Dirichlet Outer Loss: {avg_total_dirichlet_outer:.10f} "
           f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}"
           f"{val_loss_str}")
     
