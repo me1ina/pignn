@@ -28,7 +28,7 @@ num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
 epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 1000
+epochs_main = 200
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
@@ -424,6 +424,8 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
         total_val_loss, total_phys_val_loss, n_val_batches = 0.0, 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             for step, batch in enumerate(islice(data_val_loader, steps_per_epoch)):
+                if not (batch.edata['stim'] != 0).any():
+                    continue
                 batch = batch.to(device)
 
                 x = batch.ndata['feat']
