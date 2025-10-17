@@ -402,7 +402,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             phys_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = phys_loss + 100 * dirichlet_inner + 10 * dirichlet_outer
+            loss = phys_loss + 100 * dirichlet_inner + dirichlet_outer
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -424,8 +424,8 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
         total_val_loss, total_phys_val_loss, n_val_batches = 0.0, 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             for step, batch in enumerate(islice(data_val_loader, steps_per_epoch)):
-                if not (batch.edata['stim'] != 0).any():
-                    continue
+                #if not (batch.edata['stim'] != 0).any():
+                #    continue
                 batch = batch.to(device)
 
                 x = batch.ndata['feat']
@@ -433,16 +433,16 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
                 x = norm_feats(x, stim_center)
                 pred = model.forward_full(batch, x)
 
-                phys_loss = laplace_physics_loss_graph(batch, pred)
-                dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
-                dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-                loss = phys_loss + 100 * dirichlet_inner + 10 * dirichlet_outer
+                #phys_loss = laplace_physics_loss_graph(batch, pred)
+                #dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
+                #dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
+                loss = loss_fn_warmup(pred, y) #phys_loss + 100 * dirichlet_inner + 10 * dirichlet_outer
                 total_val_loss += loss.item()
-                total_phys_val_loss += phys_loss.item()
+                #total_phys_val_loss += phys_loss.item()
                 n_val_batches += 1
 
         avg_total_val = total_val_loss / max(1, n_val_batches)
-        avg_phys_val  = total_phys_val_loss / max(1, n_val_batches)
+        #avg_phys_val  = total_phys_val_loss / max(1, n_val_batches)
         scheduler_data_loss.step(avg_total_val)
 
         if avg_total_val < best_val - 1e-9:
@@ -460,7 +460,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 
     print(f"At epoch {epoch+1}, {n_train_batches} training batches with stim processed.")
 
-    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Laplace Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_main} "
           f"Train Loss: {avg_total_train:.10f} "
           f"Laplace Loss: {avg_total_laplace:.10f} "
