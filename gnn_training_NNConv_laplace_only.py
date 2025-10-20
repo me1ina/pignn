@@ -277,7 +277,7 @@ warmup_sampler = NeighborSampler(
     prefetch_edge_feats=['stim']
 )
 data_sampler = ClusterGCNSampler(
-    g, k=1500,                 # number of clusters (tune)
+    g, k=num_cluster_nodes,                 # number of clusters (tune)
     prefetch_ndata=['feat','label', 'w_dist', 'w_pot'],
     prefetch_edata=['stim','face_area'],
 )
