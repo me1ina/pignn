@@ -24,22 +24,18 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
+num_cluster_nodes = 1000  # number of nodes per cluster for ClusterGCNSampler
 epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 200
+epochs_main = 1000
 main_lr = 1e-4
 main_patience = 3
 ckpt_epochs = 5
 validation_epochs = 4
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
-stim_scale = 100 #/(0.0066 *2) # map µA to ~[0,1]
 alpha_for_weights = 2
-coord_max = 35.0 #mm
-z_center = 17.5 #mm
-sigma_max = 2.0 # S/m
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats                 : {in_feats}")
@@ -59,7 +55,6 @@ logging.info(f"checkpoint_epochs        : {ckpt_epochs}")
 logging.info(f"validation_epochs        : {validation_epochs}")
 logging.info(f"steps_per_epoch          : {steps_per_epoch}")
 logging.info(f"num_workers              : {num_workers}")
-logging.info(f"stim_scale               : {stim_scale}")
 logging.info(f"alpha_for_weights        : {alpha_for_weights}")
 logging.info("================================\n")
 
@@ -185,7 +180,7 @@ def laplace_physics_loss_graph(graph, potential):
 
     return (residual.abs()).mean()
 
-def dirichlet_inner_bc_loss(graph, potential, ground_truth_potential):
+def dirichlet_inner_bc_loss(graph, pred, gt_potential):
     # Find electrode nodes
     stim_mask = (graph.edata['stim'] != 0).squeeze()
     eids = graph.edges(form='eid')[stim_mask]
@@ -193,16 +188,15 @@ def dirichlet_inner_bc_loss(graph, potential, ground_truth_potential):
     stim_nodes = torch.unique(torch.cat([stim_src, stim_dst]))
     
     # Enforce ground truth potential at electrode
-    return F.mse_loss(potential[stim_nodes], 
-                      ground_truth_potential[stim_nodes])
+    return F.l1_loss(pred[stim_nodes], gt_potential[stim_nodes])
 
 def dirichlet_outer_bc_loss(graph, pred, stim_center):
     stim_center = stim_center.to(graph.ndata['feat'].device)
     x = torch.norm(graph.ndata['feat'][:, :3] - stim_center, dim=1)
-    R = torch.quantile(x, 0.85).item()
+    R = torch.quantile(x, 0.75).item()
     outer_mask_local  = (x >= R)
     dirichlet_target = 0.0
-    dirichlet = (pred[outer_mask_local] - dirichlet_target).pow(2).mean()
+    dirichlet = F.l1_loss(pred[outer_mask_local], dirichlet_target)
     return dirichlet
 
 
@@ -402,7 +396,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             phys_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = phys_loss + 100 * dirichlet_inner + dirichlet_outer
+            loss = 10 * phys_loss + 100 * dirichlet_inner + dirichlet_outer
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
