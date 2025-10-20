@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace_only.log',
+    filename='training_laplace_only_9.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -24,8 +24,8 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-num_cluster_nodes = 1000  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 20
+num_cluster_nodes = 2000  # number of nodes per cluster for ClusterGCNSampler
+epochs_warmup = 15
 warmup_lr = 1e-3
 warmup_patience = 2
 epochs_main = 1000
@@ -396,7 +396,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             phys_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = 10 * phys_loss + 100 * dirichlet_inner + dirichlet_outer
+            loss = phys_loss + 100 * dirichlet_inner + dirichlet_outer
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -469,6 +469,6 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_only.pth")
+}, "trained_gnn_NNConv_laplace_only_9.pth")
 
 print(f"Training done, model saved as trained_gnn_NNConv_laplace_only.pth")
