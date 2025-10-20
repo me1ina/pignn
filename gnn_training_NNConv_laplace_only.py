@@ -195,7 +195,7 @@ def dirichlet_outer_bc_loss(graph, pred, stim_center):
     x = torch.norm(graph.ndata['feat'][:, :3] - stim_center, dim=1)
     R = torch.quantile(x, 0.75).item()
     outer_mask_local  = (x >= R)
-    dirichlet_target = 0.0
+    dirichlet_target = torch.zeros_like(pred[outer_mask_local], device=graph.ndata['feat'].device)
     dirichlet = F.l1_loss(pred[outer_mask_local], dirichlet_target)
     return dirichlet
 
