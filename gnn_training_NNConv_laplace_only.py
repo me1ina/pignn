@@ -114,9 +114,9 @@ class EdgeAwareGNN(nn.Module):
 
 def save_ckpt(model, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
-        ckpt_name = f"checkpoint_best.pth"
+        ckpt_name = f"checkpoint_best_v12.pth"
     else:
-        ckpt_name = f"checkpoint_epoch_last.pth"
+        ckpt_name = f"checkpoint_epoch_last_v12.pth"
     path = path + ckpt_name
     torch.save({
     "model_state": model.state_dict()
