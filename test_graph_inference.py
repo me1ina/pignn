@@ -17,7 +17,7 @@ sigma_max = 2.0      # S/m
 stim_scale = 100
 
 def edge_feats(b):
-    s = (b.edata['stim'] * stim_scale).unsqueeze(-1)
+    s = (b.edata['stim']).unsqueeze(-1)
     ones = torch.ones_like(s)
     return torch.cat([s, ones], dim=-1) 
 class EdgeAwareGNN(nn.Module):
@@ -91,7 +91,7 @@ inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_Pudendal_AIR_2_AS1.6.dgl"
 #model_name = "trained_gnn_NNConv_dirichlet_v2.pth"
 #model_name = "trained_gnn_NNConv_laplace_v4.pth" 
-model_name = "trained_gnn_NNConv_laplace_only.pth" 
+model_name = "trained_gnn_NNConv_laplace_only_8.pth" 
 
 in_feats = 6
 hidden_feats = 64
