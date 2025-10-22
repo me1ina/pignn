@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace_only_10.log',
+    filename='training_laplace_only_11.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -24,13 +24,13 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-num_cluster_nodes = 2000  # number of nodes per cluster for ClusterGCNSampler
+num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
 epochs_warmup = 15
 warmup_lr = 1e-3
 warmup_patience = 2
 epochs_main = 500
 main_lr = 1e-4
-main_patience = 3
+main_patience = 4
 ckpt_epochs = 5
 validation_epochs = 4
 steps_per_epoch = 2000
@@ -193,7 +193,7 @@ def dirichlet_inner_bc_loss(graph, pred, gt_potential):
 def dirichlet_outer_bc_loss(graph, pred, stim_center):
     stim_center = stim_center.to(graph.ndata['feat'].device)
     x = torch.norm(graph.ndata['feat'][:, :3] - stim_center, dim=1)
-    R = torch.quantile(x, 0.75).item()
+    R = torch.quantile(x, 0.80).item()
     outer_mask_local  = (x >= R)
     dirichlet_target = torch.zeros_like(pred[outer_mask_local], device=graph.ndata['feat'].device)
     dirichlet = F.l1_loss(pred[outer_mask_local], dirichlet_target)
@@ -469,6 +469,6 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_only_10.pth")
+}, "trained_gnn_NNConv_laplace_only_11.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_10.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_11.pth")
