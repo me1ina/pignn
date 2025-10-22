@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace_only_11.log',
+    filename='training_laplace_only_12.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -30,7 +30,7 @@ warmup_lr = 1e-3
 warmup_patience = 2
 epochs_main = 500
 main_lr = 1e-4
-main_patience = 4
+main_patience = 6
 ckpt_epochs = 5
 validation_epochs = 4
 steps_per_epoch = 2000
@@ -396,7 +396,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             phys_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = phys_loss + 100 * dirichlet_inner + dirichlet_outer
+            loss = phys_loss + 10 * dirichlet_inner + dirichlet_outer
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -469,6 +469,6 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_only_11.pth")
+}, "trained_gnn_NNConv_laplace_only_12.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_11.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_12.pth")
