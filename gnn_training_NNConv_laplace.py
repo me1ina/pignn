@@ -1,5 +1,5 @@
 from itertools import islice
-from random import random
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
