@@ -157,7 +157,7 @@ logging.info(f"GPU: {gpu_name} CC:{cc}  is_ampere_plus={is_ampere_plus}\n"
              f"AMP dtype={'bf16' if use_bf16 else 'fp16' if use_cuda else 'cpu'}\n"
              f"TF32={'on' if is_ampere_plus else 'off'}\n")
 
-loaded_graphs, _ = dgl.load_graphs("mesh_graph_vol_area.dgl")
+loaded_graphs, _ = dgl.load_graphs("graph_area_vol_VagusA1924_HC0_AS1.1.dgl")
 g = loaded_graphs[0]
 #g = dgl.to_bidirected(g, copy_ndata=True)
 
