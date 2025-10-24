@@ -25,10 +25,10 @@ edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
 num_cluster_nodes = 1500  # number of nodes per cluster for ClusterGCNSampler
-epochs_warmup = 15
+epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 500
+epochs_main = 200
 main_lr = 1e-4
 main_patience = 6
 ckpt_epochs = 5
@@ -132,16 +132,18 @@ def get_stim_center(g):
 def norm_feats(feats, stim_center):
     x = torch.empty_like(feats)
     x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device))
-    x[:, 3:6] = (feats[:, 3:6])
+    x[:, 3:6] = (feats[:, 3:6]) * 1e3 # mS/m
     return x
 
 def laplace_physics_loss_graph(graph, potential):
   # Edge endpoints in *local IDs*
     src, dst = graph.edges()
+    keep = src < dst
+    src, dst = src[keep], dst[keep]
 
     coords = graph.ndata['feat'][:, 0:3] # mm
     sigma  = graph.ndata['feat'][:, 3:6] # S/m
-    I_stim   = graph.edata['stim'].view(-1, 1) #mikroA = 1e-6 A
+    I_stim   = -graph.edata['stim'].view(-1, 1) #mikroA = 1e-6 A
     face_areas   = graph.edata['face_area'].view(-1, 1) # mm^2
 
     # Map to local node features
@@ -165,7 +167,7 @@ def laplace_physics_loss_graph(graph, potential):
     flux_density = sigma_eff * delta_V / (dist + 1e-12) # (mV/mm)*(S/m) = (1e-3 V / 1e-3 m)*S/m = A/m^2
     flux_current = flux_density * face_areas # mikroA
 
-    flux_current = flux_current / 2.0
+    #flux_current = flux_current / 2.0
 
     zero_flux = torch.zeros_like(potential)
     inflow = zero_flux.index_add(0, dst, flux_current) # mikroA
