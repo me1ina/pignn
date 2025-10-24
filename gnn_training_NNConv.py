@@ -34,11 +34,11 @@ ckpt_epochs = 5
 validation_epochs = 5
 steps_per_epoch = 2000
 num_workers = 2  # Number of workers for DataLoader
-stim_scale = 1/(0.0066 *2) # map µA to ~[0,1]
+#stim_scale = 1/(0.0066 *2) # map µA to ~[0,1]
 alpha_for_weights = 2
-coord_max = 35.0 #mm
-z_center = 17.5 #mm
-sigma_max = 2.0 # S/m
+#coord_max = 35.0 #mm
+#z_center = 17.5 #mm
+#sigma_max = 2.0 # S/m
 
 logging.info("=== EXPERIMENT CONFIGURATION ===")
 logging.info(f"in_feats          : {in_feats}")
@@ -57,12 +57,12 @@ logging.info(f"checkpoint_epochs : {ckpt_epochs}")
 logging.info(f"validation_epochs : {validation_epochs}")
 logging.info(f"steps_per_epoch   : {steps_per_epoch}")
 logging.info(f"num_workers       : {num_workers}")
-logging.info(f"stim_scale        : {stim_scale}")
+#logging.info(f"stim_scale        : {stim_scale}")
 logging.info(f"alpha_for_weights : {alpha_for_weights}")
 logging.info("================================\n")
 
 def edge_feats(b):
-    s = (b.edata['stim'] * stim_scale).unsqueeze(-1)
+    s = (b.edata['stim'] ).unsqueeze(-1)
     ones = torch.ones_like(s)
     return torch.cat([s, ones], dim=-1) 
 class EdgeAwareGNN(nn.Module):
@@ -107,15 +107,15 @@ class EdgeAwareGNN(nn.Module):
         e3 = edge_feats(blocks[2])
         return F.softplus(self.conv3(blocks[2], h, e3))
 
-def save_ckpt(model, stim_scale, best_val: bool = False, path: str = "checkpoints/"):
+def save_ckpt(model, epoch, best_val: bool = False, path: str = "checkpoints/"):
     if best_val:
-        ckpt_name = f"checkpoint_best.pth"
+        ckpt_name = f"checkpoint_data_best.pth"
     else:
-        ckpt_name = f"checkpoint_epoch_last.pth"
+        ckpt_name = f"checkpoint_data_epoch_last.pth"
     path = path + ckpt_name
     torch.save({
     "model_state": model.state_dict(),
-    "stim_scale": stim_scale,
+    "epoch": epoch,
     }, path)
     logging.info(f"Checkpoint saved to {path}")
 
@@ -126,14 +126,10 @@ def get_stim_center(g):
     return g.ndata['feat'][stim_nodes, :3].mean(0)  # xyz in mm
 
 def norm_feats(feats, stim_center):
-    feats[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device)) / coord_max 
-    #feats[:, 0] = feats[:, 0] / coord_max               # x ~ [-1,1]
-    #feats[:, 1] = feats[:, 1] / coord_max               # y ~ [-1,1]
-    #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
-
-    # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
-    feats[:, 3:6] = (feats[:, 3:6]).clamp_min(0.0) / sigma_max
-    return feats
+    x = torch.empty_like(feats)
+    x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device))
+    x[:, 3:6] = (feats[:, 3:6]) * 1e3 # mS/m
+    return x
 
 print("Start training process")
 print("Loading graph and initializing model...")
@@ -175,7 +171,7 @@ for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
     min_val = float(g.ndata['feat'][:,i].amin())
     max_val = float(g.ndata['feat'][:,i].amax())
     logging.info(f"{name} range: min {min_val}, max {max_val}")
-    if i < 2:
+'''    if i < 2:
         min_val = min_val/coord_max
         max_val = max_val/coord_max
     elif i == 2:
@@ -184,13 +180,13 @@ for i,name in enumerate(["x","y","z","sigmaxx","sigmayy","sigmazz"]):
     else:
         min_val = min_val/sigma_max
         max_val = max_val/sigma_max
-    logging.info(f"{name} scaled range: min {min_val}, max {max_val}")
+    logging.info(f"{name} scaled range: min {min_val}, max {max_val}")'''
 
 logging.info(f"I stim range: min {float(g.edata['stim'].amin())}, "
              f"max {float(g.edata['stim'].amax())}")
 
-logging.info(f"I stim range scaled: min {float(g.edata['stim'].amin()) * stim_scale}, "
-             f"max {float(g.edata['stim'].amax()) * stim_scale}")
+#logging.info(f"I stim range scaled: min {float(g.edata['stim'].amin()) * stim_scale}, "
+#             f"max {float(g.edata['stim'].amax()) * stim_scale}")
 
 logging.info(f"Potential range: min {float(g.ndata['label'].amin())}, "
              f"max {float(g.ndata['label'].amax())}")
@@ -356,12 +352,12 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         if avg_val < best_val - 1e-9:
             best_val = avg_val
             logging.info(f"New best validation loss: {best_val:.6f} at epoch {epoch+1}")
-            save_ckpt(model, stim_scale, True)
+            save_ckpt(model, epoch, True)
 
     avg_train = total_train_loss / max(1, n_train_batches)
 
     if (epoch + 1) % ckpt_epochs == 0:
-        save_ckpt(model, stim_scale, False)
+        save_ckpt(model, epoch, False)
 
     val_loss_str = f"Val Loss: {avg_val:.8f} " if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_data_loss} "
@@ -375,7 +371,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-    "stim_scale": stim_scale,
-}, "trained_gnn_NNConv_v4.pth")
+}, "trained_gnn_NNConv_v6.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_v4.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_v6.pth")
