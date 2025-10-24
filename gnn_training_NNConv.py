@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training.log',
+    filename='training_v6.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'

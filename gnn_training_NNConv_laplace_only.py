@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace_only_12.log',
+    filename='training_laplace_only_13.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -471,6 +471,6 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_only_12.pth")
+}, "trained_gnn_NNConv_laplace_only_13.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_12.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_13.pth")
