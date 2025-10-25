@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_v6.log',
+    filename='training_v7.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -128,7 +128,7 @@ def get_stim_center(g):
 def norm_feats(feats, stim_center):
     x = torch.empty_like(feats)
     x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device))
-    x[:, 3:6] = (feats[:, 3:6]) * 1e3 # mS/m
+    x[:, 3:6] = (feats[:, 3:6])
     return x
 
 print("Start training process")
@@ -371,6 +371,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_v6.pth")
+}, "trained_gnn_NNConv_v7.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_v6.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_v7.pth")
