@@ -77,14 +77,14 @@ def norm_feats(feats, stim_center):
     #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
 
     # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
-    x[:, 3:6] = (feats[:, 3:6])
+    x[:, 3:6] = (feats[:, 3:6]) * 1e3
     return x
 
-#inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
+inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC240_AS1.2.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HT60_AS1.1.dgl"
 #inference_graph_name = "graph_area_VagusA1924_HC0_AS1.7.dgl"
-inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
+#inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_Sacral_Interstim_AS3.3.dgl"
 #inference_graph_name = "graph_area_Sacral_Cuff_2_AS1.5.dgl"
 #inference_graph_name = "graph_area_Pudendal_Cuff_1_AS1.10.dgl"
@@ -92,7 +92,7 @@ inference_graph_name = "graph_area_vol_VagusA1924_HC0_AS1.1.dgl"
 #model_name = "trained_gnn_NNConv_dirichlet_v2.pth"
 #model_name = "trained_gnn_NNConv_laplace_v4.pth" 
 #model_name = "checkpoints/checkpoint_best.pth" 
-model_name = "trained_data_physics.pth" 
+model_name = "trained_gnn_NNConv_v6.pth" 
 
 in_feats = 6
 hidden_feats = 64
@@ -173,6 +173,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_combi_VagusA1924_HC0_AS1_1.dgl", [g])
-logging.info("Graph saved to inference_gnn_combi_VagusA1924_HC0_AS1_1.dgl")
+dgl.save_graphs("inference_gnn_combi_VagusA6050_HC0_AS1.dgl", [g])
+logging.info("Graph saved to inference_gnn_data_VagusA6050_HC0_AS1.dgl")
 
