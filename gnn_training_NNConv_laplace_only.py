@@ -138,8 +138,8 @@ def norm_feats(feats, stim_center):
 def laplace_physics_loss_graph(graph, potential):
   # Edge endpoints in *local IDs*
     src, dst = graph.edges()
-    keep = src < dst
-    src, dst = src[keep], dst[keep]
+    #keep = src < dst
+    #src, dst = src[keep], dst[keep]
 
     coords = graph.ndata['feat'][:, 0:3] # mm
     sigma  = graph.ndata['feat'][:, 3:6] # S/m
