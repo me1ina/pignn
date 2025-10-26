@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace_only_14.log',
+    filename='training_laplace_only_15.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -139,13 +139,13 @@ def laplace_physics_loss_graph(graph, potential):
   # Edge endpoints in *local IDs*
     src, dst = graph.edges()
     
-    keep = src < dst
-    src, dst = src[keep], dst[keep]
+    #keep = src < dst
+    #src, dst = src[keep], dst[keep]
 
     coords = graph.ndata['feat'][:, 0:3] # mm
     sigma  = graph.ndata['feat'][:, 3:6] # S/m
     I_stim   = -graph.edata['stim'].view(-1, 1) #mikroA = 1e-6 A
-    face_areas   = graph.edata['face_area'].view(-1, 1)[keep] # mm^2
+    face_areas   = graph.edata['face_area'].view(-1, 1) # mm^2
 
     # Map to local node features
     pot_src, pot_dst = potential[src], potential[dst] # mV
@@ -168,7 +168,7 @@ def laplace_physics_loss_graph(graph, potential):
     flux_density = sigma_eff * delta_V / (dist + 1e-12) # (mV/mm)*(S/m) = (1e-3 V / 1e-3 m)*S/m = A/m^2
     flux_current = flux_density * face_areas # mikroA
 
-    #flux_current = flux_current / 2.0
+    flux_current = flux_current / 2.0
 
     zero_flux = torch.zeros_like(potential)
     inflow = zero_flux.index_add(0, dst, flux_current) # mikroA
@@ -399,7 +399,7 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
             phys_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            loss = phys_loss + 10 * dirichlet_inner + dirichlet_outer
+            loss = 10 * phys_loss + 10 * dirichlet_inner + dirichlet_outer
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -472,6 +472,6 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_only_14.pth")
+}, "trained_gnn_NNConv_laplace_only_15.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_14.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_15.pth")
