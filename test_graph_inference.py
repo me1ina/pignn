@@ -92,7 +92,7 @@ inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #model_name = "trained_gnn_NNConv_dirichlet_v2.pth"
 #model_name = "trained_gnn_NNConv_laplace_v4.pth" 
 #model_name = "checkpoints/checkpoint_best.pth" 
-model_name = "trained_gnn_NNConv_v6.pth" 
+model_name = "trained_gnn_NNConv_v7.pth" 
 
 in_feats = 6
 hidden_feats = 64
@@ -173,6 +173,6 @@ g.ndata["Electric_potential"] = preds.squeeze(1)
 end_time = time.time() - start_time
 logging.info(f"Inference completed in {end_time:.3f} seconds, storing results in graph...")
 
-dgl.save_graphs("inference_gnn_combi_VagusA6050_HC0_AS1.dgl", [g])
+dgl.save_graphs("inference_gnn_data_VagusA6050_HC0_AS1.dgl", [g])
 logging.info("Graph saved to inference_gnn_data_VagusA6050_HC0_AS1.dgl")
 
