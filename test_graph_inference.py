@@ -91,7 +91,7 @@ inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
 #inference_graph_name = "graph_area_Pudendal_AIR_2_AS1.6.dgl"
 #model_name = "trained_gnn_NNConv_dirichlet_v2.pth"
 #model_name = "trained_gnn_NNConv_laplace_v4.pth" 
-model_name = "trained_gnn_NNConv_laplace_only_13.pth" 
+model_name = "trained_gnn_NNConv_laplace_only_15.pth" 
 #model_name = "trained_gnn_NNConv_v7.pth" 
 
 in_feats = 6
