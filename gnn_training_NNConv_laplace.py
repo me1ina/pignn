@@ -317,7 +317,7 @@ all_nids = torch.arange(G.num_nodes())
 perm = torch.randperm(len(all_nids))
 split = int(0.05 * len(all_nids))     # 5% for val
 warmup_val_nids = all_nids[perm[:split]]
-warmup_train_nids = all_nids[perm[split:]]s
+warmup_train_nids = all_nids[perm[split:]]
 
 # Create two DataLoaders - one for training and one for validation
 warmup_sampler = NeighborSampler(
