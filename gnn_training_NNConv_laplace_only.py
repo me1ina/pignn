@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_laplace_only_13.log',
+    filename='training_laplace_only_14.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -138,13 +138,14 @@ def norm_feats(feats, stim_center):
 def laplace_physics_loss_graph(graph, potential):
   # Edge endpoints in *local IDs*
     src, dst = graph.edges()
-    #keep = src < dst
-    #src, dst = src[keep], dst[keep]
+    
+    keep = src < dst
+    src, dst = src[keep], dst[keep]
 
     coords = graph.ndata['feat'][:, 0:3] # mm
     sigma  = graph.ndata['feat'][:, 3:6] # S/m
     I_stim   = -graph.edata['stim'].view(-1, 1) #mikroA = 1e-6 A
-    face_areas   = graph.edata['face_area'].view(-1, 1) # mm^2
+    face_areas   = graph.edata['face_area'].view(-1, 1)[keep] # mm^2
 
     # Map to local node features
     pot_src, pot_dst = potential[src], potential[dst] # mV
@@ -471,6 +472,6 @@ for epoch in tqdm(range(epochs_main), desc="Physics Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_laplace_only_13.pth")
+}, "trained_gnn_NNConv_laplace_only_14.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_13.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_laplace_only_14.pth")
