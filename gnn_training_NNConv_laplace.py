@@ -25,11 +25,11 @@ out_feats = 1
 edge_feat_dim = 2
 fanouts = [15, 10, 3]
 batch_size = 2048
-num_cluster_nodes = 3000  # number of partitions in ClusterGCNSampler
-epochs_warmup = 10
+num_cluster_nodes = 1500  # number of partitions in ClusterGCNSampler
+epochs_warmup = 20
 warmup_lr = 1e-3
 warmup_patience = 2
-epochs_main = 500
+epochs_main = 200
 main_lr = 1e-4
 main_patience = 4
 ckpt_epochs = 5
@@ -317,7 +317,7 @@ all_nids = torch.arange(G.num_nodes())
 perm = torch.randperm(len(all_nids))
 split = int(0.05 * len(all_nids))     # 5% for val
 warmup_val_nids = all_nids[perm[:split]]
-warmup_train_nids = all_nids[perm[split:]]
+warmup_train_nids = all_nids[perm[split:]]s
 
 # Create two DataLoaders - one for training and one for validation
 warmup_sampler = NeighborSampler(
@@ -340,6 +340,7 @@ for pid, subg in enumerate(probe_loader):
         stim_parts.append(pid)
 
 nonstim_parts = list(set(all_parts) - set(stim_parts))
+logging.info(f"{len(stim_parts)} stim clusters, {len(nonstim_parts)} non-stim clusters")
 print(f"{len(stim_parts)} stim clusters, {len(nonstim_parts)} non-stim clusters")
 
 # Split clusters (NOT nodes) into train/val
@@ -356,17 +357,6 @@ warmup_train_loader = DataLoader(
 warmup_val_loader = DataLoader(
     G, warmup_val_nids, warmup_sampler,
     batch_size=batch_size, shuffle=False, drop_last=False,
-    num_workers=num_workers, persistent_workers=True
-)
-data_train_loader = DataLoader(
-    G, train_parts, data_sampler,
-    batch_size=1, shuffle=True, drop_last=False,
-    num_workers=num_workers, persistent_workers=True
-)
-
-data_val_loader = DataLoader(
-    G, val_parts, data_sampler,
-    batch_size=1, shuffle=True, drop_last=False,
     num_workers=num_workers, persistent_workers=True
 )
 
@@ -464,7 +454,7 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
             laplace_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            phys_loss = laplace_loss + 10 * dirichlet_inner + dirichlet_outer
+            phys_loss = 100 * laplace_loss + 10 * dirichlet_inner + dirichlet_outer
             loss = data_loss + phys_loss
 
         optimizer_data_loss.zero_grad(set_to_none=True)
@@ -485,10 +475,20 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 
     # Validation loop
     if (epoch + 1) % validation_epochs == 0:
+        val_loader = make_epoch_loader(
+            G, data_sampler,
+            stim_parts=stim_parts,
+            nonstim_parts=nonstim_parts,
+            k_nonstim=200,                 
+            batch_size=1,
+            shuffle=True,
+            num_workers=num_workers,
+            persistent_workers=True,
+        )
         model.eval() 
         total_val_loss, total_data_val_loss, total_phys_val_loss,n_val_batches = 0.0, 0.0, 0.0, 0
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
-            for step, batch in enumerate(islice(data_val_loader, steps_per_epoch)):
+            for step, batch in enumerate(val_loader):
                 batch = batch.to(device)
 
                 x = batch.ndata['feat_norm']
@@ -501,7 +501,7 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
                 laplace_loss = laplace_physics_loss_graph(batch, pred)
                 dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
                 dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-                phys_loss = laplace_loss + 10 * dirichlet_inner + dirichlet_outer
+                phys_loss = 100 * laplace_loss + 10 * dirichlet_inner + dirichlet_outer
                 loss = data_loss + phys_loss
                 total_val_loss += loss.item()
                 total_data_val_loss += data_loss.item()
@@ -528,7 +528,10 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
     if (epoch + 1) % ckpt_epochs == 0:
         save_ckpt(model, False)
 
-    val_loss_str = f"\nTotal Val Loss: {avg_total_val:.10f} Data Val Loss: {avg_data_val:.10f} Physics Val Loss: {avg_phys_val:.10f}" if (epoch + 1) % validation_epochs == 0 else ""
+    val_loss_str = (f"\nTotal Val Loss: {avg_total_val:.10f} "
+                    f"Data Val Loss: {avg_data_val:.10f} "
+                    f"Physics Val Loss: {avg_phys_val:.10f} "
+                    f"Val Steps: {n_val_batches}") if (epoch + 1) % validation_epochs == 0 else ""
     msg = (f"[DataLoss] Epoch {epoch+1}/{epochs_main} "
           f"Train Loss: {avg_total_train:.10f} "
           f"Data Loss: {avg_total_data:.10f} "
@@ -536,7 +539,8 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
             f"(Laplace: {avg_total_laplace:.10f}, "
             f"Dirichlet Inner: {avg_total_dirichlet_inner:.10f}, "
             f"Dirichlet Outer: {avg_total_dirichlet_outer:.10f})  "
-          f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e}"
+          f"LR: {optimizer_data_loss.param_groups[0]['lr']:.2e} "
+          f"Train Steps: {n_train_batches} "
           f"{val_loss_str}")
     
     print(msg)
