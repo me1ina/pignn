@@ -12,7 +12,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_data_physics.log',
+    filename='training_data_physics_2.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -549,6 +549,6 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_data_physics.pth")
+}, "trained_data_physics_2.pth")
 
-print(f"Training done, model saved as trained_data_physics.pth")
+print(f"Training done, model saved as trained_data_physics_2.pth")
