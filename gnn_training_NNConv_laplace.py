@@ -12,7 +12,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_data_physics_3.log',
+    filename='training_data_physics_4.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -247,7 +247,7 @@ def dirichlet_inner_bc_loss(graph, pred, gt_potential):
 
     pred_s = pred.index_select(0, stim_nodes)
     gt_s   = gt_potential.index_select(0, stim_nodes)
-    return F.l1_loss(pred_s, gt_s, reduction='mean')
+    return F.mse_loss(pred_s, gt_s, reduction='mean')
 
 
 def dirichlet_outer_bc_loss(graph, pred, stim_center, q=0.80):
@@ -263,7 +263,7 @@ def dirichlet_outer_bc_loss(graph, pred, stim_center, q=0.80):
         return pred.new_zeros(())
 
     target = torch.zeros_like(pred[mask], device=pred.device)
-    return F.l1_loss(pred[mask], target, reduction='mean')
+    return F.mse_loss(pred[mask], target, reduction='mean')
 
 
 print("Start training process")
@@ -450,12 +450,12 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             pred = model.forward_full(batch, x)
-            data_loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
+            data_loss = (w * F.mse_loss(pred, y, reduction='none')).mean()
             laplace_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            phys_loss = 1500 * laplace_loss + 230 * dirichlet_inner + dirichlet_outer
-            loss = data_loss + phys_loss
+            phys_loss = 1500 * laplace_loss + 250 * dirichlet_inner + dirichlet_outer
+            loss = data_loss * 10 + phys_loss
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -497,12 +497,12 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
                 w = w * (1.0 + batch.ndata['w_dist'].unsqueeze(-1).to(x.dtype))
                 pred = model.forward_full(batch, x)
 
-                data_loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
+                data_loss = (w * F.mse_loss(pred, y, reduction='none')).mean()
                 laplace_loss = laplace_physics_loss_graph(batch, pred)
                 dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
                 dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
                 phys_loss = 1500 * laplace_loss + 250 * dirichlet_inner + dirichlet_outer
-                loss = data_loss + phys_loss
+                loss = data_loss * 10 + phys_loss
                 total_val_loss += loss.item()
                 total_data_val_loss += data_loss.item()
                 total_phys_val_loss += phys_loss.item()
@@ -549,6 +549,6 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_data_physics_3.pth")
+}, "trained_data_physics_4.pth")
 
-print(f"Training done, model saved as trained_data_physics_3.pth")
+print(f"Training done, model saved as trained_data_physics_4.pth")
