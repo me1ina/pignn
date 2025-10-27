@@ -247,7 +247,7 @@ def dirichlet_inner_bc_loss(graph, pred, gt_potential):
 
     pred_s = pred.index_select(0, stim_nodes)
     gt_s   = gt_potential.index_select(0, stim_nodes)
-    return F.f1_loss(pred_s, gt_s, reduction='mean')
+    return F.l1_loss(pred_s, gt_s, reduction='mean')
 
 
 def dirichlet_outer_bc_loss(graph, pred, stim_center, q=0.80):
@@ -263,7 +263,7 @@ def dirichlet_outer_bc_loss(graph, pred, stim_center, q=0.80):
         return pred.new_zeros(())
 
     target = torch.zeros_like(pred[mask], device=pred.device)
-    return F.f1_loss(pred[mask], target, reduction='mean')
+    return F.l1_loss(pred[mask], target, reduction='mean')
 
 
 print("Start training process")
