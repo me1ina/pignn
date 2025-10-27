@@ -132,7 +132,7 @@ def get_stim_center(g):
 def norm_feats(feats, stim_center):
     x = torch.empty_like(feats)
     x[:, 0:3] = (feats[:, 0:3] - stim_center.to(feats.device))
-    x[:, 3:6] = (feats[:, 3:6]) * 1e3 # mS/m
+    x[:, 3:6] = (feats[:, 3:6]) #* 1e3  mS/m
     return x
 
 def laplace_physics_loss_graph(graph, potential):
@@ -144,7 +144,7 @@ def laplace_physics_loss_graph(graph, potential):
 
     coords = graph.ndata['feat'][:, 0:3] # mm
     sigma  = graph.ndata['feat'][:, 3:6] # S/m
-    I_stim   = -graph.edata['stim'].view(-1, 1)[keep] #mikroA = 1e-6 A
+    I_stim   = graph.edata['stim'].view(-1, 1)[keep] #mikroA = 1e-6 A
     face_areas   = graph.edata['face_area'].view(-1, 1)[keep] # mm^2
 
     # Map to local node features

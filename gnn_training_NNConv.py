@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_v7.log',
+    filename='training_v8.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -233,7 +233,7 @@ val_loader = DataLoader(
 
 optimizer_warmup = torch.optim.Adam(model.parameters(), lr=warmup_lr)
 scheduler_warmup = ReduceLROnPlateau(optimizer_warmup, mode='min', factor=0.5, patience=warmup_patience)
-loss_fn_warmup = nn.L1Loss()
+loss_fn_warmup = nn.MSELoss()
 
 optimizer_data_loss = torch.optim.Adam(model.parameters(), lr=data_loss_lr)
 scheduler_data_loss = ReduceLROnPlateau(optimizer_data_loss, mode='min', factor=0.1, patience=data_loss_patience)
@@ -313,7 +313,7 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
         with torch.cuda.amp.autocast(enabled=use_cuda, dtype=amp_dtype):
             x = norm_feats(x, stim_center)
             pred = model(blocks, x)
-            loss = (w * F.l1_loss(pred, y, reduction='none')).mean()
+            loss = (w * F.mse_loss(pred, y, reduction='none')).mean()
 
         optimizer_data_loss.zero_grad(set_to_none=True)
         if scaler_data_loss.is_enabled():
@@ -371,6 +371,6 @@ for epoch in tqdm(range(epochs_data_loss), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_gnn_NNConv_v7.pth")
+}, "trained_gnn_NNConv_v8.pth")
 
-print(f"Training done, model saved as trained_gnn_NNConv_v7.pth")
+print(f"Training done, model saved as trained_gnn_NNConv_v8.pth")
