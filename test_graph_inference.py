@@ -77,7 +77,7 @@ def norm_feats(feats, stim_center):
     #feats[:, 2] = (feats[:, 2] - z_center) / z_center   # z ~ [-1,1]
 
     # map conductivity to [0,1] (optionally clip tiny floor to reduce skew)
-    x[:, 3:6] = (feats[:, 3:6]) * 1e3
+    x[:, 3:6] = (feats[:, 3:6])
     return x
 
 inference_graph_name = "graph_area_VagusA6050_HC0_AS1.1.dgl"
