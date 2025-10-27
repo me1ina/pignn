@@ -12,7 +12,7 @@ from tqdm import tqdm
 import os
 
 logging.basicConfig(
-    filename='training_data_physics_2.log',
+    filename='training_data_physics_3.log',
     filemode='w',           # overwrite on each run
     level=logging.INFO,
     format='%(asctime)s %(message)s'
@@ -220,7 +220,7 @@ def laplace_physics_loss_graph(graph, potential):
     outflow = zero_flux.index_add(0, src, flux_current) # mikroA
 
     stim_per_cell = torch.zeros_like(potential)
-    stim_per_cell = stim_per_cell.index_add(0, dst, 0.5 * I_stim) # mikroA (0.25 because of 2 edges between src and dst)
+    stim_per_cell = stim_per_cell.index_add(0, dst, 0.5 * I_stim) # mikroA
     stim_per_cell = stim_per_cell.index_add(0, src, 0.5 * I_stim) # mikroA
 
     divergence = inflow - outflow # mikroA
@@ -454,7 +454,7 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
             laplace_loss = laplace_physics_loss_graph(batch, pred)
             dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
             dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-            phys_loss = 100 * laplace_loss + 10 * dirichlet_inner + dirichlet_outer
+            phys_loss = 1500 * laplace_loss + 230 * dirichlet_inner + dirichlet_outer
             loss = data_loss + phys_loss
 
         optimizer_data_loss.zero_grad(set_to_none=True)
@@ -501,7 +501,7 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
                 laplace_loss = laplace_physics_loss_graph(batch, pred)
                 dirichlet_outer = dirichlet_outer_bc_loss(batch, pred, stim_center)
                 dirichlet_inner = dirichlet_inner_bc_loss(batch, pred, y)
-                phys_loss = 100 * laplace_loss + 10 * dirichlet_inner + dirichlet_outer
+                phys_loss = 1500 * laplace_loss + 250 * dirichlet_inner + dirichlet_outer
                 loss = data_loss + phys_loss
                 total_val_loss += loss.item()
                 total_data_val_loss += data_loss.item()
@@ -549,6 +549,6 @@ for epoch in tqdm(range(epochs_main), desc="Data Loss Training"):
 # Save the model
 torch.save({
     "model_state": model.state_dict(),
-}, "trained_data_physics_2.pth")
+}, "trained_data_physics_3.pth")
 
-print(f"Training done, model saved as trained_data_physics_2.pth")
+print(f"Training done, model saved as trained_data_physics_3.pth")
